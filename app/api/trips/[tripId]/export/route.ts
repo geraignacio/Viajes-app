@@ -18,6 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ trip
   }
 
   const data = await getTripDashboard(tripId);
+  if (!data) return NextResponse.json({ error: "No encontrado" }, { status: 404 });
   const slug = data.trip.name.normalize("NFD").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "viaje";
 
   if (format === "pdf") {

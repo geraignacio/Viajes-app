@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Plus } from "lucide-react";
-import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
@@ -21,13 +20,12 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
   const { tripId } = await params;
   const user = await requireUser(`/trips/${tripId}`);
 
-  const me = await prisma.tripMember.findUnique({
-    where: { tripId_userId: { tripId, userId: user.id } },
-  });
-  if (!me || me.leftAt) notFound();
-
+  // Todo en paralelo; el acceso se valida con los integrantes ya cargados.
   const data = await getTripDashboard(tripId);
+  if (!data) notFound();
   const { trip, balanceById, settlement, totalSpent, expenses } = data;
+  const me = trip.members.find((m) => m.userId === user.id);
+  if (!me || me.leftAt) notFound();
   const readOnly = !!trip.archivedAt;
   const canModerate = me.role !== "MEMBER";
 

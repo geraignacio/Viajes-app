@@ -14,6 +14,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Los `include` se resuelven con JOIN en una sola consulta en vez de una por
+  // relación: menos viajes a la BD, clave con Supabase lejos del servidor.
+  previewFeatures = ["relationJoins"]
 }
 
 // Supabase + Vercel (serverless):

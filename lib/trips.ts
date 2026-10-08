@@ -35,12 +35,12 @@ export async function listTripsForUser(userId: string) {
   }));
 }
 
-export type TripDashboard = Awaited<ReturnType<typeof getTripDashboard>>;
+export type TripDashboard = NonNullable<Awaited<ReturnType<typeof getTripDashboard>>>;
 
 /** Todo lo que necesita la vista del viaje (y la exportación). */
 export async function getTripDashboard(tripId: string) {
   const [trip, balances, expenses, transfers] = await Promise.all([
-    prisma.trip.findUniqueOrThrow({
+    prisma.trip.findUnique({
       where: { id: tripId },
       include: {
         members: {
@@ -61,6 +61,7 @@ export async function getTripDashboard(tripId: string) {
     }),
   ]);
 
+  if (!trip) return null;
   const settlement: Settlement[] = minimizeTransfers(balances);
   const totalSpent = expenses.reduce((a, e) => a + e.amount, 0);
   const balanceById = new Map<string, MemberBalance>(balances.map((b) => [b.memberId, b]));

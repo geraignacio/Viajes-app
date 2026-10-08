@@ -1,13 +1,15 @@
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { ActionError } from "@/lib/action-result";
 
-export async function getSessionUser() {
+/** Una sola lectura de sesión por request, aunque la pidan layout y página. */
+export const getSessionUser = cache(async () => {
   const session = await auth();
   return session?.user?.id ? { ...session.user, id: session.user.id } : null;
-}
+});
 
 /** Para páginas: redirige al login si no hay sesión. */
 export async function requireUser(callbackUrl?: string) {

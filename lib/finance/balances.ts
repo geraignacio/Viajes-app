@@ -61,59 +61,32 @@ export function buildBalances(
   });
 }
 
-const toMap = <T extends { _sum?: { amount?: number | null } }>(
-  rows: T[],
-  key: (r: T) => string,
-) => new Map(rows.map((r) => [key(r), r._sum?.amount ?? 0]));
+type BalanceRow = { memberId: string; paid: bigint; share: bigint; sent: bigint; received: bigint };
 
 /**
- * Saldos de todo el viaje en 5 consultas agregadas (GROUP BY en Postgres),
- * independiente del número de gastos: O(miembros) filas transferidas.
- * Usa los índices (memberId) de ExpensePayer/ExpenseSplit y
- * (tripId, deletedAt) de Expense/Transfer.
+ * Saldos de todo el viaje en UNA consulta: por cada integrante, cuatro
+ * subconsultas SUM correlacionadas (usan los índices por memberId). Una sola
+ * ida y vuelta a la BD sin importar cuántos gastos o abonos haya.
  */
-export async function getTripBalances(
-  db: PrismaClient,
-  tripId: string,
-): Promise<MemberBalance[]> {
-  const liveExpense = { tripId, deletedAt: null };
-  const liveTransfer = { tripId, deletedAt: null };
+export async function getTripBalances(db: PrismaClient, tripId: string): Promise<MemberBalance[]> {
+  const rows = await db.$queryRaw<BalanceRow[]>`
+    SELECT m."id" AS "memberId",
+      COALESCE((SELECT SUM(p."amount") FROM "ExpensePayer" p JOIN "Expense" e ON e."id" = p."expenseId"
+                WHERE p."memberId" = m."id" AND e."deletedAt" IS NULL), 0) AS "paid",
+      COALESCE((SELECT SUM(s."amount") FROM "ExpenseSplit" s JOIN "Expense" e ON e."id" = s."expenseId"
+                WHERE s."memberId" = m."id" AND e."deletedAt" IS NULL), 0) AS "share",
+      COALESCE((SELECT SUM(t."amount") FROM "Transfer" t
+                WHERE t."fromMemberId" = m."id" AND t."deletedAt" IS NULL), 0) AS "sent",
+      COALESCE((SELECT SUM(t."amount") FROM "Transfer" t
+                WHERE t."toMemberId" = m."id" AND t."deletedAt" IS NULL), 0) AS "received"
+    FROM "TripMember" m
+    WHERE m."tripId" = ${tripId}
+    ORDER BY m."joinedAt" ASC`;
 
-  const [members, paid, share, sent, received] = await db.$transaction([
-    db.tripMember.findMany({ where: { tripId }, select: { id: true } }),
-    db.expensePayer.groupBy({
-      by: ["memberId"],
-      where: { expense: liveExpense },
-      _sum: { amount: true },
-      orderBy: { memberId: "asc" },
-    }),
-    db.expenseSplit.groupBy({
-      by: ["memberId"],
-      where: { expense: liveExpense },
-      _sum: { amount: true },
-      orderBy: { memberId: "asc" },
-    }),
-    db.transfer.groupBy({
-      by: ["fromMemberId"],
-      where: liveTransfer,
-      _sum: { amount: true },
-      orderBy: { fromMemberId: "asc" },
-    }),
-    db.transfer.groupBy({
-      by: ["toMemberId"],
-      where: liveTransfer,
-      _sum: { amount: true },
-      orderBy: { toMemberId: "asc" },
-    }),
-  ]);
-
+  const col = (k: Exclude<keyof BalanceRow, "memberId">) =>
+    new Map(rows.map((r) => [r.memberId, Number(r[k])]));
   return buildBalances(
-    members.map((m) => m.id),
-    {
-      paid: toMap(paid, (r) => r.memberId),
-      share: toMap(share, (r) => r.memberId),
-      sent: toMap(sent, (r) => r.fromMemberId),
-      received: toMap(received, (r) => r.toMemberId),
-    },
+    rows.map((r) => r.memberId),
+    { paid: col("paid"), share: col("share"), sent: col("sent"), received: col("received") },
   );
 }
