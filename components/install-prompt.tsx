@@ -82,6 +82,9 @@ export function InstallPrompt() {
   if (!mode) return null;
 
   return (
+    <>
+    {/* Espacio al final de la página para que el aviso no tape los últimos botones. */}
+    <div aria-hidden className="h-36 sm:hidden" />
     <div
       role="dialog"
       aria-label="Instalar la app"
@@ -110,5 +113,6 @@ export function InstallPrompt() {
         <X className="size-4" />
       </button>
     </div>
+    </>
   );
 }

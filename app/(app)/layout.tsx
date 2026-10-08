@@ -17,7 +17,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </Link>
           <div className="ml-auto flex items-center gap-1">
             <ThemeToggle />
-            <Avatar name={user.name ?? user.email ?? "?"} image={user.image} className="mx-1" />
+            <Link href="/profile" aria-label="Mi perfil y datos de transferencia" className="mx-1 rounded-full">
+              <Avatar name={user.name ?? user.email ?? "?"} image={user.image} />
+            </Link>
             <form
               action={async () => {
                 "use server";

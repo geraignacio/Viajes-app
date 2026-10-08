@@ -90,3 +90,12 @@ test("cuotas: 100.000 en 6 cuotas suma exacto y vence cada mes", async () => {
   assert.equal(later.paidCount, 2);
   assert.equal(later.outdated, true);
 });
+
+test("RUT: valida dígito verificador y formatea", async () => {
+  const { isValidRut, formatRut } = await import("../rut.ts");
+  assert.equal(isValidRut("11.111.111-1"), true);
+  assert.equal(isValidRut("12345678-5"), true);
+  assert.equal(isValidRut("12345678-6"), false);
+  assert.equal(isValidRut("7654321-6"), true);
+  assert.equal(formatRut("123456785"), "12.345.678-5");
+});

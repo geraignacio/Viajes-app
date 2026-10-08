@@ -73,6 +73,23 @@ model User {
   sessions     Session[]
   memberships  TripMember[]
   tripsCreated Trip[]       @relation("TripCreatedBy")
+  paymentInfo  PaymentInfo?
+}
+
+// Datos para RECIBIR transferencias (nunca claves ni tarjetas). Solo los ven
+// las personas que comparten un viaje con este usuario.
+model PaymentInfo {
+  userId        String   @id
+  holderName    String?  @db.VarChar(100)
+  rut           String?  @db.VarChar(12)
+  bank          String?  @db.VarChar(60)
+  accountType   String?  @db.VarChar(40)
+  accountNumber String?  @db.VarChar(30)
+  email         String?  @db.VarChar(120)
+  notes         String?  @db.VarChar(300) // otros medios: PayPal, alias, etc.
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Account {

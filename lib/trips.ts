@@ -45,7 +45,10 @@ export async function getTripDashboard(tripId: string) {
       include: {
         members: {
           orderBy: { joinedAt: "asc" },
-          include: { user: { select: { image: true, email: true } }, installmentPlan: true },
+          include: {
+            user: { select: { image: true, email: true, paymentInfo: true } },
+            installmentPlan: true,
+          },
         },
       },
     }),

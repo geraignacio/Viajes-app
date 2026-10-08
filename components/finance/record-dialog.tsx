@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { ArrowRightLeft, Receipt } from "lucide-react";
+import { ArrowRightLeft, Copy, Landmark, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { createExpense } from "@/server-actions/expenses";
 import { createTransfer } from "@/server-actions/transfers";
 import { CATEGORIES, CATEGORY_LABEL, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
 import { formatMoney, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
 import { splitEqually } from "@/lib/finance/split";
+import { PAYMENT_FIELDS, paymentInfoText } from "@/lib/payment-info";
 import type { FieldErrors } from "@/lib/action-result";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
@@ -359,6 +360,7 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
         </div>
       </div>
       <FieldError errors={errors.toMemberId} />
+      <RecipientPaymentInfo member={members.find((m) => m.id === toId)} isMe={toId === meId} />
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-2">
           <Label htmlFor="t-amount">Monto ({currency})</Label>
@@ -450,6 +452,44 @@ function Segmented<T extends string>({
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Datos bancarios de quien recibe el abono, con botón para copiarlos. */
+function RecipientPaymentInfo({ member, isMe }: { member?: MemberLite; isMe: boolean }) {
+  if (!member || isMe) return null;
+  const info = member.payment;
+  if (!info || !PAYMENT_FIELDS.some(([k]) => info[k])) {
+    return (
+      <p className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-xs">
+        {member.name} aún no agregó sus datos de transferencia.
+      </p>
+    );
+  }
+  return (
+    <div className="bg-muted/50 rounded-lg border p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-sm font-medium">
+          <Landmark className="size-4" /> Datos de {member.name}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => navigator.clipboard.writeText(paymentInfoText(info)).then(() => toast.success("Datos copiados"))}
+        >
+          <Copy /> Copiar
+        </Button>
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+        {PAYMENT_FIELDS.filter(([k]) => info[k]).map(([k, label]) => (
+          <div key={k} className="contents">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="font-medium break-all">{info[k]}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

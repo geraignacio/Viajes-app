@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Landmark, Plus } from "lucide-react";
 import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
@@ -34,6 +34,9 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
     id: m.id,
     name: m.displayName,
     image: m.user?.image,
+    payment: m.user?.paymentInfo
+      ? (({ userId: _u, updatedAt: _t, ...rest }) => rest)(m.user.paymentInfo)
+      : null,
     isGuest: !m.userId,
     active: !m.leftAt,
     planSummary: m.installmentPlan
@@ -93,6 +96,18 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
       </div>
 
       <SummaryCards totalSpent={totalSpent} expenseCount={expenses.length} me={myBalance} currency={trip.currency} />
+
+      {!readOnly && myBalance.owedToMe > 0 && !allMembers.find((m) => m.id === me.id)?.payment && (
+        <Link
+          href="/profile"
+          className="border-primary/40 bg-primary/5 hover:bg-primary/10 flex items-center gap-3 rounded-xl border p-4 text-sm transition-colors"
+        >
+          <Landmark className="text-primary size-5 shrink-0" />
+          <span>
+            Te deben dinero. <b>Agrega tus datos de transferencia</b> para que el grupo sepa dónde pagarte.
+          </span>
+        </Link>
+      )}
 
       {!readOnly && (myBalance.remaining > 0 || myPlan) && (
         <InstallmentCard
