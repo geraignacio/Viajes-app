@@ -4,6 +4,7 @@ import { autoTable } from "jspdf-autotable";
 import type { TripDashboard } from "@/lib/trips";
 import { CATEGORY_LABEL, SPLIT_LABEL } from "@/lib/constants";
 import { formatDate, formatMoney, toMajor } from "@/lib/money";
+import { installmentStatus } from "@/lib/finance/installments";
 
 type Section = { title: string; head: string[]; rows: (string | number)[][] };
 
@@ -11,6 +12,7 @@ type Section = { title: string; head: string[]; rows: (string | number)[][] };
 function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
   const { trip, expenses, transfers, balances, settlement } = data;
   const name = new Map(trip.members.map((m) => [m.id, m.displayName]));
+  const planOf = new Map(trip.members.map((m) => [m.id, m.installmentPlan]));
   // En CSV se exportan números sin formato (aptos para planillas).
   const money = (n: number) => (forCsv ? toMajor(n, trip.currency) : formatMoney(n, trip.currency));
   const date = (d: Date) => (forCsv ? d.toISOString().slice(0, 10) : formatDate(d));
@@ -44,15 +46,22 @@ function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
     },
     {
       title: "Saldos por persona",
-      head: ["Integrante", "Pagó", "Cuota asignada", "Abonado", "Restante por pagar", "Saldo"],
-      rows: balances.map((b) => [
+      head: ["Integrante", "Pagó", "Cuota asignada", "Abonado", "Restante por pagar", "Saldo", "Plan de cuotas"],
+      rows: balances.map((b) => {
+        const plan = planOf.get(b.memberId);
+        const st = plan ? installmentStatus(plan, b) : null;
+        return [
         name.get(b.memberId) ?? "",
         money(b.paid),
         money(b.share),
         money(b.covered),
         money(b.remaining),
         money(b.balance),
-      ]),
+        plan && st
+          ? `${plan.installments} x ${formatMoney(st.perInstallment, trip.currency)} (${st.paidCount}/${plan.installments} pagadas)`
+          : "",
+        ];
+      }),
     },
     {
       title: "Cierre de cuentas",

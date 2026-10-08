@@ -12,6 +12,7 @@ import { MemberBalances } from "@/components/finance/member-balances";
 import { RecordDialog } from "@/components/finance/record-dialog";
 import { SettlementList } from "@/components/finance/settlement-list";
 import { SummaryCards } from "@/components/finance/summary-cards";
+import { InstallmentCard } from "@/components/finance/installment-card";
 import { AddGuestForm } from "@/components/trips/add-guest-form";
 import { ExportMenu } from "@/components/trips/export-menu";
 import { InviteCard } from "@/components/trips/invite-card";
@@ -35,7 +36,19 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
     image: m.user?.image,
     isGuest: !m.userId,
     active: !m.leftAt,
+    planSummary: m.installmentPlan
+      ? {
+          installments: m.installmentPlan.installments,
+          baseAmount: m.installmentPlan.baseAmount,
+          baseContributed: m.installmentPlan.baseContributed,
+          firstDueDate: m.installmentPlan.firstDueDate.toISOString().slice(0, 10),
+        }
+      : null,
   }));
+  const myBalance = balanceById.get(me.id)!;
+  const myPlan = allMembers.find((m) => m.id === me.id)?.planSummary ?? null;
+  // A quién le pago mis cuotas: mi mayor acreedor según el cierre de cuentas.
+  const payToId = settlement.filter((s) => s.from === me.id).sort((a, b) => b.amount - a.amount)[0]?.to ?? null;
   // En formularios solo integrantes activos; en saldos, todos (incluye quien salió).
   const activeMembers = allMembers.filter((m) => m.active);
 
@@ -79,7 +92,20 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         </div>
       </div>
 
-      <SummaryCards totalSpent={totalSpent} expenseCount={expenses.length} me={balanceById.get(me.id)!} currency={trip.currency} />
+      <SummaryCards totalSpent={totalSpent} expenseCount={expenses.length} me={myBalance} currency={trip.currency} />
+
+      {!readOnly && (myBalance.remaining > 0 || myPlan) && (
+        <InstallmentCard
+          tripId={trip.id}
+          currency={trip.currency}
+          members={activeMembers}
+          meId={me.id}
+          remaining={myBalance.remaining}
+          contributed={myBalance.contributed}
+          plan={myPlan}
+          payToId={payToId}
+        />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="min-w-0 space-y-6">

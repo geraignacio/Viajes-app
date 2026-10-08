@@ -167,6 +167,7 @@ model TripMember {
   transfersSent     Transfer[]     @relation("TransferFrom")
   transfersReceived Transfer[]     @relation("TransferTo")
   transfersCreated  Transfer[]     @relation("TransferCreatedBy")
+  installmentPlan   InstallmentPlan?
 
   // Un usuario aparece una sola vez por viaje (Postgres permite varios NULL).
   @@unique([tripId, userId])
@@ -250,4 +251,20 @@ model Transfer {
   @@index([tripId, deletedAt, date(sort: Desc)])
   @@index([fromMemberId])
   @@index([toMemberId])
+}
+
+// Plan "pago mi deuda en N cuotas" de un integrante. Guarda la deuda y lo
+// aportado al momento de crearlo; el avance se deriva de los saldos actuales:
+// lo pagado desde el plan = aportado hoy - baseContributed (gastos nuevos no lo alteran).
+model InstallmentPlan {
+  id           String   @id @default(cuid())
+  memberId     String   @unique // un plan por integrante (y por viaje)
+  installments Int // 2..24
+  baseAmount   Int // deuda a dividir, en unidades mínimas; > 0
+  baseContributed Int // lo que había aportado (pagado + enviado - recibido) al crear el plan
+  firstDueDate DateTime @db.Date // las siguientes vencen cada mes
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  member TripMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 }

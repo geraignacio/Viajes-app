@@ -66,3 +66,27 @@ test("liquidación: 2.000 casos aleatorios quedan en cero con ≤ k-1 pagos", ()
     assert.ok(r.length <= Math.max(0, b.filter((x) => x.balance !== 0).length - 1));
   }
 });
+
+test("cuotas: 100.000 en 6 cuotas suma exacto y vence cada mes", async () => {
+  const { installmentStatus, splitInstallments, addMonths } = await import("./installments.ts");
+  const parts = splitInstallments(100_000, 6);
+  assert.equal(parts.reduce((a, b) => a + b, 0), 100_000);
+  assert.deepEqual(parts, [16_667, 16_667, 16_667, 16_667, 16_666, 16_666]);
+  assert.equal(addMonths("2026-01-31", 1), "2026-02-28");
+
+  const plan = { installments: 6, baseAmount: 100_000, baseContributed: 5_000, firstDueDate: "2026-10-15" };
+  // Debía 100.000 y desde entonces abonó 40.000 → 2 cuotas pagadas, la 3ª parcial.
+  const s = installmentStatus(plan, { remaining: 60_000, contributed: 45_000 });
+  assert.equal(s.paidCount, 2);
+  assert.equal(s.next?.n, 3);
+  assert.equal(s.next?.dueDate, "2026-12-15");
+  assert.ok(s.next!.covered > 0.39 && s.next!.covered < 0.41);
+  assert.equal(s.outdated, false);
+  assert.equal(s.completed, false);
+
+  assert.equal(installmentStatus(plan, { remaining: 0, contributed: 105_000 }).completed, true);
+  // Gasto nuevo de 30.000: las 2 cuotas pagadas siguen pagadas, pero el plan queda desactualizado.
+  const later = installmentStatus(plan, { remaining: 90_000, contributed: 45_000 });
+  assert.equal(later.paidCount, 2);
+  assert.equal(later.outdated, true);
+});
