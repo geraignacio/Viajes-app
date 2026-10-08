@@ -1,0 +1,250 @@
+// =============================================================================
+// Viajes — gastos compartidos de viaje (estilo Splitwise/Tricount)
+// -----------------------------------------------------------------------------
+// Convenciones:
+//  * Todos los montos se guardan como ENTEROS en unidades mínimas de la moneda
+//    del viaje (CLP: pesos, USD: centavos). Nunca Float. Esto hace que las sumas
+//    sean exactas y que "sum(splits) == amount" se pueda verificar con igualdad.
+//  * Una sola moneda por viaje (Trip.currency, ISO 4217). Los gastos heredan esa
+//    moneda; la conversión multi-moneda queda fuera del alcance del MVP.
+//  * Los saldos NO se persisten: se derivan siempre de Expense/ExpensePayer/
+//    ExpenseSplit/Transfer (fuente única de verdad, sin desincronización).
+//  * Borrado lógico (deletedAt) en gastos y transferencias para auditoría.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Supabase + Vercel (serverless):
+//  * DATABASE_URL → Transaction Pooler (PgBouncer/Supavisor, puerto 6543) con
+//    `?pgbouncer=true&connection_limit=1`. Lo usa la app en runtime: cada
+//    función serverless abre como máximo 1 conexión y el pooler las multiplexa.
+//  * DIRECT_URL   → conexión de sesión (puerto 5432). La usa SOLO Prisma CLI
+//    (migrate, db push, studio), porque las migraciones necesitan una sesión
+//    real que PgBouncer en modo transacción no ofrece.
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum TripRole {
+  OWNER // creó el viaje; puede editar/archivar y regenerar el código
+  ADMIN // puede editar el viaje y gastos de otros
+  MEMBER
+}
+
+enum ExpenseCategory {
+  LODGING // Alojamiento
+  TRANSPORT // Vuelos / Transporte
+  FOOD // Comida
+  ACTIVITIES // Actividades
+  OTHER // Otros
+}
+
+enum SplitType {
+  EQUAL_ALL // Partes iguales entre todos los miembros activos
+  EQUAL_SELECTED // Partes iguales entre los seleccionados
+  EXACT // Montos exactos por persona
+}
+
+// -----------------------------------------------------------------------------
+// Auth.js (NextAuth v5) — modelos requeridos por @auth/prisma-adapter
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String? // avatar de Google
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  memberships  TripMember[]
+  tripsCreated Trip[]       @relation("TripCreatedBy")
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// -----------------------------------------------------------------------------
+// Dominio
+// -----------------------------------------------------------------------------
+
+model Trip {
+  id          String    @id @default(cuid())
+  name        String    @db.VarChar(120)
+  description String?   @db.VarChar(1000)
+  startDate   DateTime? @db.Date
+  endDate     DateTime? @db.Date
+  currency    String    @default("CLP") @db.Char(3) // ISO 4217
+  // Código corto para unirse (/join/ABCD2345). Se puede regenerar para revocar.
+  inviteCode  String    @unique @db.VarChar(16)
+  archivedAt  DateTime? // viaje cerrado manualmente → "pasado"
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  createdBy User         @relation("TripCreatedBy", fields: [createdById], references: [id])
+  members   TripMember[]
+  expenses  Expense[]
+  transfers Transfer[]
+
+  @@index([createdById])
+  @@index([endDate])
+}
+
+// Participante de un viaje. Todas las relaciones financieras apuntan a
+// TripMember (no a User) para que:
+//  1. los saldos sean siempre "por viaje",
+//  2. se puedan agregar acompañantes sin cuenta Google (userId = null) que
+//     luego reclaman su lugar al unirse con el código,
+//  3. alguien pueda salir del viaje (leftAt) sin romper el historial.
+model TripMember {
+  id          String    @id @default(cuid())
+  tripId      String
+  userId      String? // null = invitado "fantasma" aún sin cuenta
+  displayName String    @db.VarChar(80) // copia del nombre al unirse; editable
+  role        TripRole  @default(MEMBER)
+  joinedAt    DateTime  @default(now())
+  leftAt      DateTime?
+
+  trip Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  expensesCreated   Expense[]      @relation("ExpenseCreatedBy")
+  payments          ExpensePayer[]
+  splits            ExpenseSplit[]
+  transfersSent     Transfer[]     @relation("TransferFrom")
+  transfersReceived Transfer[]     @relation("TransferTo")
+  transfersCreated  Transfer[]     @relation("TransferCreatedBy")
+
+  // Un usuario aparece una sola vez por viaje (Postgres permite varios NULL).
+  @@unique([tripId, userId])
+  @@index([userId])
+}
+
+model Expense {
+  id          String          @id @default(cuid())
+  tripId      String
+  title       String          @db.VarChar(140)
+  notes       String?         @db.VarChar(1000)
+  amount      Int // total en unidades mínimas; > 0
+  category    ExpenseCategory @default(OTHER)
+  splitType   SplitType
+  date        DateTime        @default(now()) @db.Date
+  receiptUrl  String?         @db.VarChar(2048) // enlace al comprobante
+  receiptNote String?         @db.VarChar(500) // n° de boleta, referencia, etc.
+  createdById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  deletedAt   DateTime?
+
+  trip      Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy TripMember     @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  payers    ExpensePayer[] // quién(es) pagaron: sum(amount) == Expense.amount
+  splits    ExpenseSplit[] // a quién le corresponde: sum(amount) == Expense.amount
+
+  // Listado del viaje ordenado por fecha, excluyendo borrados.
+  @@index([tripId, deletedAt, date(sort: Desc)])
+  @@index([tripId, category])
+}
+
+// "Quién pagó". Una fila = pagador único; varias filas = pago compartido
+// (ej: Ana puso 60.000 y Beto 40.000 de una cena de 100.000).
+model ExpensePayer {
+  expenseId String
+  memberId  String
+  amount    Int // > 0
+
+  expense Expense    @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  member  TripMember @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  @@id([expenseId, memberId])
+  @@index([memberId])
+}
+
+// "Cuánto le corresponde a cada uno". Siempre se persiste el monto final ya
+// calculado (también en divisiones iguales) para que el historial no cambie
+// si después entra o sale gente del viaje.
+model ExpenseSplit {
+  expenseId String
+  memberId  String
+  amount    Int // >= 0
+
+  expense Expense    @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  member  TripMember @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  @@id([expenseId, memberId])
+  @@index([memberId])
+}
+
+// Abono / transferencia directa: "Pagué $X a [integrante]".
+model Transfer {
+  id           String    @id @default(cuid())
+  tripId       String
+  fromMemberId String
+  toMemberId   String
+  amount       Int // > 0
+  date         DateTime  @default(now()) @db.Date
+  note         String?   @db.VarChar(500)
+  createdById  String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  from      TripMember @relation("TransferFrom", fields: [fromMemberId], references: [id], onDelete: Restrict)
+  to        TripMember @relation("TransferTo", fields: [toMemberId], references: [id], onDelete: Restrict)
+  createdBy TripMember @relation("TransferCreatedBy", fields: [createdById], references: [id])
+
+  @@index([tripId, deletedAt, date(sort: Desc)])
+  @@index([fromMemberId])
+  @@index([toMemberId])
+}
