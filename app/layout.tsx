@@ -5,10 +5,10 @@ import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "Los Endeudados", template: "%s · Los Endeudados" },
+  title: { default: "Viajes", template: "%s · Viajes" },
   description: "Gastos compartidos de viaje con saldos y abonos al día.",
-  applicationName: "Los Endeudados",
-  appleWebApp: { capable: true, title: "Endeudados", statusBarStyle: "default" },
+  applicationName: "Viajes",
+  appleWebApp: { capable: true, title: "Viajes", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

@@ -13,7 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <header className="bg-background/80 sticky top-0 z-40 border-b backdrop-blur">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4">
           <Link href="/trips" className="flex items-center gap-2 font-semibold">
-            <Plane className="text-primary size-5" /> Los Endeudados
+            <Plane className="text-primary size-5" /> Viajes
           </Link>
           <div className="ml-auto flex items-center gap-1">
             <ThemeToggle />

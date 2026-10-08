@@ -21,7 +21,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         <div className="bg-primary/10 text-primary inline-flex size-12 items-center justify-center rounded-xl">
           <Plane className="size-6" />
         </div>
-        <h1 className="text-3xl font-bold tracking-tight">Los Endeudados</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Viajes</h1>
         <p className="text-muted-foreground">
           Registra los gastos del grupo, anota los abonos y sabe en todo momento cuánto pagaste y cuánto te queda.
         </p>

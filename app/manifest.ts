@@ -3,8 +3,8 @@ import type { MetadataRoute } from "next";
 // Manifiesto PWA: permite "Instalar app" / "Agregar a pantalla de inicio".
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Los Endeudados",
-    short_name: "Endeudados",
+    name: "Viajes",
+    short_name: "Viajes",
     description: "Gastos compartidos de viaje con saldos y abonos al día.",
     lang: "es",
     start_url: "/trips",

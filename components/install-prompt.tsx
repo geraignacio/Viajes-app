@@ -91,7 +91,7 @@ export function InstallPrompt() {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/icons/icon-192.png" alt="" className="size-10 rounded-lg" />
       <div className="min-w-0 flex-1 space-y-2">
-        <p className="text-sm font-semibold">Instala Los Endeudados</p>
+        <p className="text-sm font-semibold">Instala Viajes</p>
         {mode === "android" ? (
           <>
             <p className="text-muted-foreground text-xs">Ábrela desde tu pantalla de inicio, como cualquier app.</p>
