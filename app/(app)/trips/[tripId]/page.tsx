@@ -24,7 +24,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
   // Todo en paralelo; el acceso se valida con los integrantes ya cargados.
   const data = await getTripDashboard(tripId);
   if (!data) notFound();
-  const { trip, balanceById, settlement, totalSpent, expenses } = data;
+  const { trip, balanceById, familyBalanceById, headOf, settlement, totalSpent, expenses } = data;
   const me = trip.members.find((m) => m.userId === user.id);
   if (!me || me.leftAt) notFound();
   const readOnly = !!trip.archivedAt;
@@ -38,6 +38,8 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
       ? (({ userId: _u, updatedAt: _t, ...rest }) => rest)(m.user.paymentInfo)
       : null,
     isGuest: !m.userId,
+    isOwner: m.role === "OWNER",
+    parentId: m.parentMemberId,
     active: !m.leftAt,
     planSummary: m.installmentPlan
       ? {
@@ -48,11 +50,20 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         }
       : null,
   }));
-  const myBalance = balanceById.get(me.id)!;
+  // Si tengo hijos/as a cargo, mi deuda incluye la de ellos; si soy hijo/a, la paga mi padre/madre.
+  const myHead = headOf.get(me.id) ?? me.id;
+  const myKids = trip.members.filter((m) => m.id !== me.id && headOf.get(m.id) === me.id).map((m) => m.displayName);
+  const myBalance = myHead === me.id ? familyBalanceById.get(me.id)! : balanceById.get(me.id)!;
+  const familyNote =
+    myHead !== me.id
+      ? `Tu deuda la paga ${trip.members.find((m) => m.id === myHead)?.displayName}`
+      : myKids.length > 0
+        ? `Incluye a ${myKids.join(", ")}`
+        : null;
   const myPlan = allMembers.find((m) => m.id === me.id)?.planSummary ?? null;
   // A quién le pago mis cuotas: mi mayor acreedor según el cierre de cuentas.
   const payToId = settlement.filter((s) => s.from === me.id).sort((a, b) => b.amount - a.amount)[0]?.to ?? null;
-  // En formularios solo integrantes activos; en saldos, todos (incluye quien salió).
+  // Quien salió del viaje (con saldo en cero) solo queda en el historial.
   const activeMembers = allMembers.filter((m) => m.active);
 
   return (
@@ -95,7 +106,13 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         </div>
       </div>
 
-      <SummaryCards totalSpent={totalSpent} expenseCount={expenses.length} me={myBalance} currency={trip.currency} />
+      <SummaryCards
+        totalSpent={totalSpent}
+        expenseCount={expenses.length}
+        me={myBalance}
+        currency={trip.currency}
+        note={familyNote}
+      />
 
       {!readOnly && myBalance.owedToMe > 0 && !allMembers.find((m) => m.id === me.id)?.payment && (
         <Link
@@ -109,7 +126,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         </Link>
       )}
 
-      {!readOnly && (myBalance.remaining > 0 || myPlan) && (
+      {!readOnly && myHead === me.id && (myBalance.remaining > 0 || myPlan) && (
         <InstallmentCard
           tripId={trip.id}
           currency={trip.currency}
@@ -136,10 +153,14 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         </div>
         <div className="space-y-6">
           <MemberBalances
-            members={allMembers}
+            tripId={trip.id}
+            members={activeMembers}
             balances={balanceById}
+            familyBalances={familyBalanceById}
             currency={trip.currency}
             meId={me.id}
+            canModerate={canModerate}
+            readOnly={readOnly}
             footer={!readOnly && <AddGuestForm tripId={trip.id} />}
           />
           {!readOnly && <InviteCard tripId={trip.id} code={trip.inviteCode} canRegenerate={canModerate} />}

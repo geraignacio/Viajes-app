@@ -29,3 +29,12 @@ export const addGuestSchema = z.object({
   tripId: id,
   displayName: z.string().trim().min(1, "Ingresa un nombre").max(80),
 });
+
+export const removeMemberSchema = z.object({ tripId: id, memberId: id });
+
+export const setParentSchema = z.object({
+  tripId: id,
+  memberId: id,
+  /** null = deja de estar a cargo de alguien. */
+  parentMemberId: id.nullable(),
+});

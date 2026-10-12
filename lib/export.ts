@@ -10,7 +10,7 @@ type Section = { title: string; head: string[]; rows: (string | number)[][] };
 
 /** Mismo contenido para CSV y PDF: gastos, abonos, saldos y liquidación. */
 function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
-  const { trip, expenses, transfers, balances, settlement } = data;
+  const { trip, expenses, transfers, balances, settlement, headOf, familyBalanceById } = data;
   const name = new Map(trip.members.map((m) => [m.id, m.displayName]));
   const planOf = new Map(trip.members.map((m) => [m.id, m.installmentPlan]));
   // En CSV se exportan números sin formato (aptos para planillas).
@@ -46,10 +46,12 @@ function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
     },
     {
       title: "Saldos por persona",
-      head: ["Integrante", "Pagó", "Cuota asignada", "Abonado", "Restante por pagar", "Saldo", "Plan de cuotas"],
+      head: ["Integrante", "Pagó", "Cuota asignada", "Abonado", "Restante por pagar", "Saldo", "A cargo de", "Plan de cuotas"],
       rows: balances.map((b) => {
         const plan = planOf.get(b.memberId);
-        const st = plan ? installmentStatus(plan, b) : null;
+        const fam = familyBalanceById.get(b.memberId);
+        const st = plan && fam ? installmentStatus(plan, fam) : null;
+        const head = headOf.get(b.memberId);
         return [
         name.get(b.memberId) ?? "",
         money(b.paid),
@@ -57,6 +59,7 @@ function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
         money(b.covered),
         money(b.remaining),
         money(b.balance),
+        head && head !== b.memberId ? (name.get(head) ?? "") : "",
         plan && st
           ? `${plan.installments} x ${formatMoney(st.perInstallment, trip.currency)} (${st.paidCount}/${plan.installments} pagadas)`
           : "",

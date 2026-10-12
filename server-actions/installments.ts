@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
 import { getTripBalances } from "@/lib/finance/balances";
+import { familyBalances, familyHeads } from "@/lib/finance/families";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { deleteInstallmentPlanSchema, installmentPlanSchema } from "@/lib/validation/installment";
 
@@ -17,6 +18,17 @@ async function assertCanManage(tripId: string, memberId: string) {
   if (!target) throw new ActionError("Integrante inválido");
 }
 
+/** Saldo con el que se arma el plan: el propio más el de los hijos/as a cargo. */
+async function planBalance(tripId: string, memberId: string) {
+  const [balances, members] = await Promise.all([
+    getTripBalances(prisma, tripId),
+    prisma.tripMember.findMany({ where: { tripId }, select: { id: true, parentMemberId: true } }),
+  ]);
+  const heads = familyHeads(members);
+  if (heads.get(memberId) !== memberId) throw new ActionError("La deuda de un hijo/a la paga su padre o madre");
+  return familyBalances(balances, heads).find((b) => b.memberId === memberId);
+}
+
 /**
  * Crea o reemplaza el plan "pago mi deuda en N cuotas". La deuda base es el
  * restante actual de la persona; las cuotas vencen cada mes desde firstDueDate.
@@ -28,7 +40,7 @@ export async function saveInstallmentPlan(raw: unknown): Promise<ActionResult<{ 
 
   try {
     await assertCanManage(tripId, memberId);
-    const balance = (await getTripBalances(prisma, tripId)).find((b) => b.memberId === memberId);
+    const balance = await planBalance(tripId, memberId);
     const debt = balance?.remaining ?? 0;
     if (debt <= 0) throw new ActionError("No hay deuda pendiente para dividir en cuotas");
     if (debt < installments) throw new ActionError("La deuda es demasiado pequeña para tantas cuotas");

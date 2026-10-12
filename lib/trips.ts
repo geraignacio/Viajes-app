@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getTripBalances, type MemberBalance } from "@/lib/finance/balances";
 import { minimizeTransfers, type Settlement } from "@/lib/finance/settlement";
+import { familyBalances, familyHeads } from "@/lib/finance/families";
 
 export type TripStatus = "active" | "past";
 
@@ -65,9 +66,14 @@ export async function getTripDashboard(tripId: string) {
   ]);
 
   if (!trip) return null;
-  const settlement: Settlement[] = minimizeTransfers(balances);
+  // Hijos/as a cargo: el cierre de cuentas se hace por familia (padre/madre + hijos).
+  const headOf = familyHeads(trip.members);
+  const families = familyBalances(balances, headOf);
+  const settlement: Settlement[] = minimizeTransfers(families);
   const totalSpent = expenses.reduce((a, e) => a + e.amount, 0);
   const balanceById = new Map<string, MemberBalance>(balances.map((b) => [b.memberId, b]));
+  // Solo cabezas de familia; para quien no tiene hijos es igual a su saldo propio.
+  const familyBalanceById = new Map<string, MemberBalance>(families.map((b) => [b.memberId, b]));
 
-  return { trip, balances, balanceById, expenses, transfers, settlement, totalSpent };
+  return { trip, balances, balanceById, familyBalanceById, headOf, expenses, transfers, settlement, totalSpent };
 }

@@ -14,11 +14,14 @@ export function SummaryCards({
   expenseCount,
   me,
   currency,
+  note,
 }: {
   totalSpent: number;
   expenseCount: number;
   me: MemberBalance;
   currency: string;
+  /** Hijos/as a cargo: "Incluye a Sofi" o "Tu deuda la paga Gerald". */
+  note?: string | null;
 }) {
   const fmt = (n: number) => formatMoney(n, currency);
   const balanceTone =
@@ -43,6 +46,7 @@ export function SummaryCards({
           {" · pagaste "}
           {fmt(me.paid)}
         </p>
+        {note && <p className="text-primary text-xs">{note}</p>}
       </Metric>
 
       <Metric icon={Hourglass} title="Lo que me queda por pagar" className="sm:col-span-2 lg:col-span-1">

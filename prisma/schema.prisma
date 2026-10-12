@@ -13,7 +13,7 @@
 // =============================================================================
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   // Los `include` se resuelven con JOIN en una sola consulta en vez de una por
   // relación: menos viajes a la BD, clave con Supabase lejos del servidor.
   previewFeatures = ["relationJoins"]
@@ -167,28 +167,35 @@ model Trip {
 //     luego reclaman su lugar al unirse con el código,
 //  3. alguien pueda salir del viaje (leftAt) sin romper el historial.
 model TripMember {
-  id          String    @id @default(cuid())
-  tripId      String
-  userId      String? // null = invitado "fantasma" aún sin cuenta
-  displayName String    @db.VarChar(80) // copia del nombre al unirse; editable
-  role        TripRole  @default(MEMBER)
-  joinedAt    DateTime  @default(now())
-  leftAt      DateTime?
+  id             String    @id @default(cuid())
+  tripId         String
+  userId         String? // null = invitado "fantasma" aún sin cuenta
+  displayName    String    @db.VarChar(80) // copia del nombre al unirse; editable
+  role           TripRole  @default(MEMBER)
+  joinedAt       DateTime  @default(now())
+  leftAt         DateTime?
+  // Hijo/a a cargo de otro integrante: sus gastos se registran a su nombre,
+  // pero su saldo se suma al del padre/madre en el cierre de cuentas.
+  // Un solo nivel (un hijo/a no puede tener hijos a su cargo).
+  parentMemberId String?
 
-  trip Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  trip     Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user     User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent   TripMember?  @relation("MemberDependents", fields: [parentMemberId], references: [id], onDelete: SetNull)
+  children TripMember[] @relation("MemberDependents")
 
-  expensesCreated   Expense[]      @relation("ExpenseCreatedBy")
+  expensesCreated   Expense[]        @relation("ExpenseCreatedBy")
   payments          ExpensePayer[]
   splits            ExpenseSplit[]
-  transfersSent     Transfer[]     @relation("TransferFrom")
-  transfersReceived Transfer[]     @relation("TransferTo")
-  transfersCreated  Transfer[]     @relation("TransferCreatedBy")
+  transfersSent     Transfer[]       @relation("TransferFrom")
+  transfersReceived Transfer[]       @relation("TransferTo")
+  transfersCreated  Transfer[]       @relation("TransferCreatedBy")
   installmentPlan   InstallmentPlan?
 
   // Un usuario aparece una sola vez por viaje (Postgres permite varios NULL).
   @@unique([tripId, userId])
   @@index([userId])
+  @@index([parentMemberId])
 }
 
 model Expense {
@@ -274,14 +281,14 @@ model Transfer {
 // aportado al momento de crearlo; el avance se deriva de los saldos actuales:
 // lo pagado desde el plan = aportado hoy - baseContributed (gastos nuevos no lo alteran).
 model InstallmentPlan {
-  id           String   @id @default(cuid())
-  memberId     String   @unique // un plan por integrante (y por viaje)
-  installments Int // 2..24
-  baseAmount   Int // deuda a dividir, en unidades mínimas; > 0
+  id              String   @id @default(cuid())
+  memberId        String   @unique // un plan por integrante (y por viaje)
+  installments    Int // 2..24
+  baseAmount      Int // deuda a dividir, en unidades mínimas; > 0
   baseContributed Int // lo que había aportado (pagado + enviado - recibido) al crear el plan
-  firstDueDate DateTime @db.Date // las siguientes vencen cada mes
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  firstDueDate    DateTime @db.Date // las siguientes vencen cada mes
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   member TripMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 }

@@ -99,3 +99,36 @@ test("RUT: valida dígito verificador y formatea", async () => {
   assert.equal(isValidRut("7654321-6"), true);
   assert.equal(formatRut("123456785"), "12.345.678-5");
 });
+
+test("Hijos/as: su saldo se suma al del padre/madre en el cierre", async () => {
+  const { familyHeads, familyBalances } = await import("./families.ts");
+  const m = (id: string, paid: number, share: number) => ({ id, paid, share });
+  // Cena 90.000 pagada por Ana, 30.000 c/u entre Gerald, su hija Sofi y Ana.
+  const people = [m("ana", 90_000, 30_000), m("ger", 0, 30_000), m("sofi", 0, 30_000)];
+  const zero = new Map<string, number>();
+  const balances = buildBalances(
+    people.map((p) => p.id),
+    {
+      paid: new Map(people.map((p) => [p.id, p.paid])),
+      share: new Map(people.map((p) => [p.id, p.share])),
+      sent: zero,
+      received: zero,
+    },
+  );
+  const heads = familyHeads([
+    { id: "ana", parentMemberId: null },
+    { id: "ger", parentMemberId: null },
+    { id: "sofi", parentMemberId: "ger" },
+  ]);
+  const fam = familyBalances(balances, heads);
+  assert.deepEqual(
+    fam.map((b) => [b.memberId, b.balance, b.share, b.remaining]),
+    [
+      ["ana", 60_000, 30_000, 0],
+      ["ger", -60_000, 60_000, 60_000],
+    ],
+  );
+  assert.deepEqual(minimizeTransfers(fam), [{ from: "ger", to: "ana", amount: 60_000 }]);
+  // Padre/madre que no está en el viaje: responde por sí mismo.
+  assert.equal(familyHeads([{ id: "x", parentMemberId: "nadie" }]).get("x"), "x");
+});
