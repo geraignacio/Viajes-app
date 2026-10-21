@@ -36,6 +36,7 @@ auth.ts                          Configuración de Auth.js
 2. **Google OAuth**: en Google Cloud Console crea un *OAuth client ID* tipo Web con el redirect `https://<tu-app>.vercel.app/api/auth/callback/google` (y el de localhost para desarrollo).
 3. **Vercel**: importa el repo y define `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET` (`npx auth secret`), `AUTH_GOOGLE_ID` y `AUTH_GOOGLE_SECRET`.
 4. Deploy. `postinstall` ejecuta `prisma generate` y Vercel usa el script `vercel-build`, que aplica las migraciones pendientes (`prisma migrate deploy`, vía `DIRECT_URL`) antes de `next build`. Si prefieres migrar a mano, cambia el *Build Command* a `next build` y corre `npm run db:deploy` desde tu equipo.
+5. **Pausa por inactividad**: Supabase gratis pausa el proyecto tras ~7 días sin uso y el login falla con "Server error". Un cron diario de Vercel (`vercel.json`) llama a `/api/keep-alive` para evitarlo; si igual se pausa, usa *Restore project* en Supabase y vuelve a desplegar.
 
 ## Desarrollo local
 
