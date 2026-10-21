@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
 import { toMinor } from "@/lib/money";
 import { computeSplits, type SplitInput } from "@/lib/finance/split";
+import { canActFor } from "@/lib/permissions";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { deleteByIdSchema, expenseInputSchema } from "@/lib/validation/expense";
 
@@ -18,12 +19,11 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
     if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
     const currency = trip.currency;
 
-    const activeIds = (
-      await prisma.tripMember.findMany({
-        where: { tripId: trip.id, leftAt: null },
-        select: { id: true },
-      })
-    ).map((m) => m.id);
+    const activeMembers = await prisma.tripMember.findMany({
+      where: { tripId: trip.id, leftAt: null },
+      select: { id: true, userId: true, parentMemberId: true },
+    });
+    const activeIds = activeMembers.map((m) => m.id);
     const active = new Set(activeIds);
     const assertMembers = (ids: string[], field: string) => {
       if (ids.some((id) => !active.has(id))) {
@@ -43,6 +43,13 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
             .map((p) => ({ memberId: p.memberId, amount: toMinor(p.amount, currency) }))
             .filter((p) => p.amount > 0);
     assertMembers(payers.map((p) => p.memberId), "paidBy");
+    // Solo puedes anotar lo que pagaste tú (o alguien sin cuenta / tu hijo/a).
+    const byId = new Map(activeMembers.map((m) => [m.id, m]));
+    if (payers.some((p) => !canActFor(me, byId.get(p.memberId)!))) {
+      throw new ActionError("Solo puedes registrar gastos que pagaste tú", {
+        paidBy: ["Cada persona con cuenta registra sus propios pagos"],
+      });
+    }
     const paidSum = payers.reduce((a, p) => a + p.amount, 0);
     if (payers.length === 0 || paidSum !== total) {
       throw new ActionError("Lo pagado no coincide con el total del gasto", {

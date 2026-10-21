@@ -4,6 +4,7 @@ import { ArrowLeft, Landmark, Plus } from "lucide-react";
 import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
+import { canActFor } from "@/lib/permissions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
       ? (({ userId: _u, updatedAt: _t, ...rest }) => rest)(m.user.paymentInfo)
       : null,
     isGuest: !m.userId,
+    canActFor: canActFor(me, m),
     isOwner: m.role === "OWNER",
     parentId: m.parentMemberId,
     active: !m.leftAt,

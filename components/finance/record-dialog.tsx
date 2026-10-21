@@ -84,6 +84,8 @@ const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
 type FormProps = Omit<Props, "trigger" | "defaultTab"> & { onDone: () => void };
 
 function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
+  // Pagadores posibles: yo, personas sin cuenta y mis hijos/as.
+  const payable = members.filter((m) => m.id === meId || m.canActFor);
   const [pending, startTransition] = useTransition();
   const [errors, setErrors] = useState<FieldErrors>({});
 
@@ -119,7 +121,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
 
   const exactRemaining = totalMinor - [...preview.values()].reduce((a, b) => a + b, 0);
   const payersRemaining =
-    totalMinor - members.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), currency), 0);
+    totalMinor - payable.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), currency), 0);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -137,7 +139,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
           ? { mode: "single" as const, memberId: payerId }
           : {
               mode: "multiple" as const,
-              payers: members
+              payers: payable
                 .map((m) => ({ memberId: m.id, amount: num(payerAmounts[m.id] ?? "") }))
                 .filter((p) => p.amount > 0),
             },
@@ -209,14 +211,14 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
         />
         {payMode === "single" ? (
           <NativeSelect value={payerId} onChange={(e) => setPayerId(e.target.value)} aria-label="Pagado por">
-            {members.map((m) => (
+            {payable.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id === meId ? `${m.name} (yo)` : m.name}
               </option>
             ))}
           </NativeSelect>
         ) : (
-          <MemberAmountList members={members} values={payerAmounts} onChange={setPayerAmounts} step={step} meId={meId} />
+          <MemberAmountList members={payable} values={payerAmounts} onChange={setPayerAmounts} step={step} meId={meId} />
         )}
         {payMode === "multiple" && totalMinor > 0 && (
           <RemainingHint remaining={payersRemaining} fmt={fmt} what="pagos" />
@@ -340,7 +342,8 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
         <div className="grid gap-2">
           <Label htmlFor="from">Pagó</Label>
           <NativeSelect id="from" value={fromId} onChange={(e) => setFromId(e.target.value)}>
-            {members.map((m) => (
+            {/* Mis abonos (y los de quien no tiene cuenta); si el abono es para mí, cualquiera. */}
+            {members.filter((m) => toId === meId || m.id === meId || m.canActFor || m.id === fromId).map((m) => (
               <option key={m.id} value={m.id}>
                 {label(m)}
               </option>
@@ -350,7 +353,17 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
         <ArrowRightLeft className="text-muted-foreground mb-2.5 size-4" />
         <div className="grid gap-2">
           <Label htmlFor="to">A</Label>
-          <NativeSelect id="to" value={toId} onChange={(e) => setToId(e.target.value)} aria-invalid={!!errors.toMemberId}>
+          <NativeSelect
+            id="to"
+            value={toId}
+            onChange={(e) => {
+              setToId(e.target.value);
+              // Si el abono deja de ser para mí, solo puedo anotar los míos.
+              const from = members.find((m) => m.id === fromId);
+              if (e.target.value !== meId && fromId !== meId && !from?.canActFor) setFromId(meId);
+            }}
+            aria-invalid={!!errors.toMemberId}
+          >
             {members.map((m) => (
               <option key={m.id} value={m.id}>
                 {label(m)}

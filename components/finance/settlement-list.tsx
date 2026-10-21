@@ -53,7 +53,8 @@ export function SettlementList({
                   <Avatar name={to.name} image={to.image} className="size-7" />
                   <span className="text-sm font-medium">{s.to === meId ? "a ti" : to.name}</span>
                   <span className="ml-auto font-semibold tabular-nums">{formatMoney(s.amount, currency)}</span>
-                  {!readOnly && (
+                  {/* Registra el pago quien paga (o quien lo recibe, para confirmarlo). */}
+                  {!readOnly && (s.from === meId || s.to === meId || from.canActFor) && (
                     <RecordDialog
                       tripId={tripId}
                       currency={currency}
