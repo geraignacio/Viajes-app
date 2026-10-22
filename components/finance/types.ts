@@ -9,4 +9,6 @@ export type MemberLite = {
   payment?: PaymentInfoLite | null;
   /** Si quien mira puede registrar pagos a nombre de esta persona (ver lib/permissions). */
   canActFor?: boolean;
+  /** Padre/madre que responde por esta persona (hijo/a a cargo). */
+  parentId?: string | null;
 };

@@ -24,6 +24,12 @@ export function SettlementList({
   readOnly?: boolean;
 }) {
   const byId = new Map(members.map((m) => [m.id, m]));
+  // Los pagos son entre familias: se muestran los hijos/as junto a quien paga.
+  const kidsOf = (id: string) => members.filter((m) => m.parentId === id).map((m) => m.name);
+  const withKids = (id: string) => {
+    const kids = kidsOf(id);
+    return kids.length ? <span className="text-muted-foreground font-normal"> (con {kids.join(" y ")})</span> : null;
+  };
   return (
     <Card>
       <CardHeader>
@@ -48,10 +54,16 @@ export function SettlementList({
               return (
                 <li key={`${s.from}-${s.to}`} className={`flex flex-wrap items-center gap-2 rounded-lg border p-3 ${involvesMe ? "border-primary/40 bg-primary/5" : ""}`}>
                   <Avatar name={from.name} image={from.image} className="size-7" />
-                  <span className="text-sm font-medium">{s.from === meId ? "Tú" : from.name}</span>
+                  <span className="text-sm font-medium">
+                    {s.from === meId ? "Tú" : from.name}
+                    {withKids(s.from)}
+                  </span>
                   <ArrowRight className="text-muted-foreground size-4" />
                   <Avatar name={to.name} image={to.image} className="size-7" />
-                  <span className="text-sm font-medium">{s.to === meId ? "a ti" : to.name}</span>
+                  <span className="text-sm font-medium">
+                    {s.to === meId ? "a ti" : to.name}
+                    {withKids(s.to)}
+                  </span>
                   <span className="ml-auto font-semibold tabular-nums">{formatMoney(s.amount, currency)}</span>
                   {/* Registra el pago quien paga (o quien lo recibe, para confirmarlo). */}
                   {!readOnly && (s.from === meId || s.to === meId || from.canActFor) && (

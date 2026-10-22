@@ -56,6 +56,12 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
   const myHead = headOf.get(me.id) ?? me.id;
   const myKids = trip.members.filter((m) => m.id !== me.id && headOf.get(m.id) === me.id).map((m) => m.displayName);
   const myBalance = myHead === me.id ? familyBalanceById.get(me.id)! : balanceById.get(me.id)!;
+  // "Diana Aravena (con Matias)": quien paga por la familia y sus hijos/as.
+  const familyName = (headId: string) => {
+    const head = trip.members.find((m) => m.id === headId);
+    const kids = trip.members.filter((m) => m.id !== headId && headOf.get(m.id) === headId).map((m) => m.displayName);
+    return kids.length ? `${head?.displayName} (con ${kids.join(" y ")})` : (head?.displayName ?? "");
+  };
   const familyNote =
     myHead !== me.id
       ? `Tu deuda la paga ${trip.members.find((m) => m.id === myHead)?.displayName}`
@@ -114,6 +120,11 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
         me={myBalance}
         currency={trip.currency}
         note={familyNote}
+        isFamily={myHead === me.id && myKids.length > 0}
+        counterparts={settlement
+          .filter(() => myHead === me.id)
+          .filter((x) => x.from === myHead || x.to === myHead)
+          .map((x) => ({ name: familyName(x.from === myHead ? x.to : x.from), amount: x.amount }))}
       />
 
       {!readOnly && myBalance.owedToMe > 0 && !allMembers.find((m) => m.id === me.id)?.payment && (
@@ -153,7 +164,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
           />
           <ActivityList data={data} meId={me.id} canModerate={canModerate} />
         </div>
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <MemberBalances
             tripId={trip.id}
             members={activeMembers}
