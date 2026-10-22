@@ -74,6 +74,7 @@ model User {
   memberships  TripMember[]
   tripsCreated Trip[]       @relation("TripCreatedBy")
   paymentInfo  PaymentInfo?
+  driveTrips   Trip[]       @relation("TripDriveOwner")
 }
 
 // Datos para RECIBIR transferencias (nunca claves ni tarjetas). Solo los ven
@@ -138,23 +139,29 @@ model VerificationToken {
 // -----------------------------------------------------------------------------
 
 model Trip {
-  id          String    @id @default(cuid())
-  name        String    @db.VarChar(120)
-  description String?   @db.VarChar(1000)
-  startDate   DateTime? @db.Date
-  endDate     DateTime? @db.Date
-  currency    String    @default("CLP") @db.Char(3) // ISO 4217
+  id            String    @id @default(cuid())
+  name          String    @db.VarChar(120)
+  description   String?   @db.VarChar(1000)
+  startDate     DateTime? @db.Date
+  endDate       DateTime? @db.Date
+  currency      String    @default("CLP") @db.Char(3) // ISO 4217
   // Código corto para unirse (/join/ABCD2345). Se puede regenerar para revocar.
-  inviteCode  String    @unique @db.VarChar(16)
-  archivedAt  DateTime? // viaje cerrado manualmente → "pasado"
-  createdById String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  inviteCode    String    @unique @db.VarChar(16)
+  archivedAt    DateTime? // viaje cerrado manualmente → "pasado"
+  createdById   String
+  // Fotos: carpeta de Google Drive del viaje, en el Drive de quien la activó.
+  // Todas las subidas usan la cuenta de esa persona (ver lib/google-drive.ts).
+  driveFolderId String?   @db.VarChar(128)
+  driveOwnerId  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  createdBy User         @relation("TripCreatedBy", fields: [createdById], references: [id])
-  members   TripMember[]
-  expenses  Expense[]
-  transfers Transfer[]
+  createdBy  User         @relation("TripCreatedBy", fields: [createdById], references: [id])
+  driveOwner User?        @relation("TripDriveOwner", fields: [driveOwnerId], references: [id], onDelete: SetNull)
+  members    TripMember[]
+  expenses   Expense[]
+  transfers  Transfer[]
+  photos     TripPhoto[]
 
   @@index([createdById])
   @@index([endDate])
@@ -167,17 +174,19 @@ model Trip {
 //     luego reclaman su lugar al unirse con el código,
 //  3. alguien pueda salir del viaje (leftAt) sin romper el historial.
 model TripMember {
-  id             String    @id @default(cuid())
-  tripId         String
-  userId         String? // null = invitado "fantasma" aún sin cuenta
-  displayName    String    @db.VarChar(80) // copia del nombre al unirse; editable
-  role           TripRole  @default(MEMBER)
-  joinedAt       DateTime  @default(now())
-  leftAt         DateTime?
+  id                String    @id @default(cuid())
+  tripId            String
+  userId            String? // null = invitado "fantasma" aún sin cuenta
+  displayName       String    @db.VarChar(80) // copia del nombre al unirse; editable
+  role              TripRole  @default(MEMBER)
+  joinedAt          DateTime  @default(now())
+  leftAt            DateTime?
   // Hijo/a a cargo de otro integrante: sus gastos se registran a su nombre,
   // pero su saldo se suma al del padre/madre en el cierre de cuentas.
   // Un solo nivel (un hijo/a no puede tener hijos a su cargo).
-  parentMemberId String?
+  parentMemberId    String?
+  // Permiso de lectura sobre la carpeta de fotos en Drive (para revocarlo al salir).
+  drivePermissionId String?   @db.VarChar(128)
 
   trip     Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
   user     User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -191,6 +200,7 @@ model TripMember {
   transfersReceived Transfer[]       @relation("TransferTo")
   transfersCreated  Transfer[]       @relation("TransferCreatedBy")
   installmentPlan   InstallmentPlan?
+  photos            TripPhoto[]
 
   // Un usuario aparece una sola vez por viaje (Postgres permite varios NULL).
   @@unique([tripId, userId])
@@ -291,4 +301,23 @@ model InstallmentPlan {
   updatedAt       DateTime @updatedAt
 
   member TripMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+// Foto o video subido desde la app. El archivo vive en Google Drive (calidad
+// original); aquí solo queda la referencia para armar la galería y saber
+// quién lo subió (puede borrarlo esa persona o el organizador).
+model TripPhoto {
+  id           String   @id @default(cuid())
+  tripId       String
+  driveFileId  String   @unique @db.VarChar(128)
+  name         String   @db.VarChar(255)
+  mimeType     String   @db.VarChar(100)
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  trip       Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  uploadedBy TripMember @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@index([tripId, createdAt(sort: Desc)])
+  @@index([uploadedById])
 }
