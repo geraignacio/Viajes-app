@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Landmark, Plus } from "lucide-react";
+import { ArrowLeft, Camera, Landmark, Plus } from "lucide-react";
 import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
@@ -97,6 +97,11 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
           {trip.description && <p className="text-muted-foreground max-w-prose text-sm">{trip.description}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/trips/${trip.id}/photos`}>
+              <Camera /> Fotos
+            </Link>
+          </Button>
           <ExportMenu tripId={trip.id} />
           {!readOnly && (
             <RecordDialog

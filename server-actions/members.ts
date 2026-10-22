@@ -5,6 +5,7 @@ import type { TripMember } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
 import { getTripBalances } from "@/lib/finance/balances";
+import { revokeFolderSharing } from "@/lib/google-drive";
 import { formatMoney } from "@/lib/money";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { removeMemberSchema, setParentSchema } from "@/lib/validation/trip";
@@ -54,6 +55,7 @@ export async function removeMember(raw: unknown): Promise<ActionResult<{ left: b
               transfersReceived: true,
               transfersCreated: true,
               expensesCreated: true,
+              photos: true,
             },
           },
         },
@@ -71,6 +73,9 @@ export async function removeMember(raw: unknown): Promise<ActionResult<{ left: b
           : `A ${target.displayName} aún le deben ${amount}. Salden esa deuda antes de quitarlo.`,
       );
     }
+
+    // Deja de ver la carpeta de fotos en Drive (si falla, igual sale del viaje).
+    await revokeFolderSharing(memberId).catch((e) => console.error(e));
 
     await prisma.$transaction(async (tx) => {
       await tx.tripMember.updateMany({ where: { parentMemberId: memberId }, data: { parentMemberId: null } });

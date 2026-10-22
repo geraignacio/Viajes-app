@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireMember, getSessionUser } from "@/lib/access";
 import { generateInviteCode } from "@/lib/invite";
+import { syncFolderSharing } from "@/lib/google-drive";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { addGuestSchema, createTripSchema, joinTripSchema } from "@/lib/validation/trip";
 
@@ -94,6 +96,9 @@ export async function joinTrip(raw: unknown): Promise<ActionResult<{ tripId: str
         },
       });
     }
+
+    // Comparte la carpeta de fotos (si hay) sin hacer esperar a quien se une.
+    if (trip.driveFolderId) after(() => syncFolderSharing(trip.id).catch((e) => console.error(e)));
 
     revalidatePath("/trips");
     revalidatePath(`/trips/${trip.id}`);
