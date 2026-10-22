@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Plane, Receipt, Scale } from "lucide-react";
 import { getSessionUser } from "@/lib/access";
@@ -35,6 +36,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         </li>
       </ul>
       <GoogleSignIn redirectTo={target} />
+      <p className="text-muted-foreground flex justify-center gap-4 text-xs">
+        <Link href="/privacidad" className="hover:text-foreground underline-offset-2 hover:underline">
+          Privacidad
+        </Link>
+        <Link href="/terminos" className="hover:text-foreground underline-offset-2 hover:underline">
+          Condiciones
+        </Link>
+      </p>
     </main>
   );
 }
