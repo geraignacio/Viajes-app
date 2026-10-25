@@ -18,11 +18,12 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   OTHER: "Otros",
 };
 
-export const SPLIT_TYPES = ["EQUAL_ALL", "EQUAL_SELECTED", "EXACT"] as const;
+export const SPLIT_TYPES = ["EQUAL_ALL", "EQUAL_SELECTED", "EXACT", "ITEMIZED"] as const;
 export type SplitTypeValue = (typeof SPLIT_TYPES)[number];
 
 export const SPLIT_LABEL: Record<SplitTypeValue, string> = {
   EQUAL_ALL: "Partes iguales entre todos",
   EQUAL_SELECTED: "Partes iguales entre seleccionados",
   EXACT: "Montos exactos por persona",
+  ITEMIZED: "Por ítem (cada uno marca lo suyo)",
 };

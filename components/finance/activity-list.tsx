@@ -52,7 +52,7 @@ export function ActivityList({
                 const involved = [...new Set([...e.payers, ...e.splits].map((x) => x.memberId))];
                 return {
                   key: e.id,
-                  text: [e.title, e.notes, e.receiptNote, CATEGORY_LABEL[e.category], ...involved.map((id) => name.get(id))].join(" "),
+                  text: [e.title, e.notes, e.receiptNote, CATEGORY_LABEL[e.category], ...e.items.map((i) => i.name), ...involved.map((id) => name.get(id))].join(" "),
                   kind: e.category,
                   memberIds: involved,
                   amount: e.amount,
@@ -75,6 +75,23 @@ export function ActivityList({
                             </a>
                           )}
                         </p>
+                        {e.items.length > 0 && (
+                          <details className="mt-1 text-xs">
+                            <summary className="text-primary cursor-pointer">
+                              Ver {e.items.length} {e.items.length === 1 ? "ítem" : "ítems"}
+                            </summary>
+                            <ul className="text-muted-foreground mt-1 space-y-0.5">
+                              {e.items.map((i) => (
+                                <li key={i.id} className="flex gap-2">
+                                  <span className="min-w-0 flex-1 truncate">
+                                    {i.name} · {i.memberIds.map((id) => name.get(id)).join(", ")}
+                                  </span>
+                                  <span className="tabular-nums">{formatMoney(i.amount, e.originalCurrency ?? trip.currency)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-semibold tabular-nums">{fmt(e.amount)}</p>

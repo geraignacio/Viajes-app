@@ -34,6 +34,22 @@ export const splitSchema = z.discriminatedUnion("type", [
       .min(1, "Asigna al menos un monto")
       .refine(uniqueMembers, "Integrante repetido"),
   }),
+  z.object({
+    type: z.literal("ITEMIZED"),
+    items: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1, "Ponle nombre al ítem").max(100),
+          amount: positiveAmount,
+          memberIds: z
+            .array(id)
+            .min(1, "Marca quién consumió cada ítem")
+            .refine((ids) => new Set(ids).size === ids.length, "Integrante repetido"),
+        }),
+      )
+      .min(1, "Agrega al menos un ítem")
+      .max(60, "Máximo 60 ítems"),
+  }),
 ]);
 
 // Las sumas (pagadores y montos exactos == total) se validan en el servidor

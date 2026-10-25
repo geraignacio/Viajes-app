@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { ArrowRightLeft, Copy, Landmark, Receipt } from "lucide-react";
+import { ArrowRightLeft, Copy, Landmark, Plus, Receipt, X } from "lucide-react";
 import { toast } from "sonner";
 import { createExpense } from "@/server-actions/expenses";
 import { createTransfer } from "@/server-actions/transfers";
 import { fetchExchangeRate } from "@/server-actions/fx";
 import { CATEGORIES, CATEGORY_LABEL, CURRENCIES, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
 import { convertAmount, formatDate, formatMoney, formatRate, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
-import { splitEqually } from "@/lib/finance/split";
+import { splitByItems, splitEqually } from "@/lib/finance/split";
+import { allocateProportional } from "@/lib/finance/fx";
 import { PAYMENT_FIELDS, paymentInfoText } from "@/lib/payment-info";
 import type { FieldErrors } from "@/lib/action-result";
 import { cn } from "@/lib/utils";
@@ -120,6 +121,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [splitType, setSplitType] = useState<SplitTypeValue>("EQUAL_ALL");
   const [selected, setSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.id)));
   const [exact, setExact] = useState<Record<string, string>>({});
+  const [items, setItems] = useState<ItemDraft[]>(() => [newItem(members)]);
 
   // Los montos del formulario van en la moneda elegida; los saldos, en la del viaje.
   const foreign = entryCurrency !== currency;
@@ -161,11 +163,22 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
     if (splitType === "EXACT") {
       return new Map(members.map((m) => [m.id, toMinor(num(exact[m.id] ?? ""), entryCurrency)]));
     }
+    if (splitType === "ITEMIZED") {
+      // Por ítem: se calcula en la moneda elegida y se pasa a la del viaje en proporción.
+      try {
+        const rows = splitByItems(totalMinor, itemsForSplit(items, entryCurrency));
+        if (convertedMinor <= 0) return new Map<string, number>();
+        const amounts = foreign ? allocateProportional(convertedMinor, rows.map((r) => r.amount)) : rows.map((r) => r.amount);
+        return new Map(rows.map((r, i) => [r.memberId, amounts[i]]));
+      } catch {
+        return new Map<string, number>();
+      }
+    }
     const ids = splitType === "EQUAL_ALL" ? members.map((m) => m.id) : [...selected];
     return ids.length && convertedMinor > 0
       ? new Map(splitEqually(convertedMinor, ids).map((s) => [s.memberId, s.amount]))
       : new Map();
-  }, [totalMinor, convertedMinor, splitType, members, selected, exact, entryCurrency]);
+  }, [totalMinor, convertedMinor, foreign, splitType, members, selected, exact, items, entryCurrency]);
 
   const exactRemaining = totalMinor - [...preview.values()].reduce((a, b) => a + b, 0);
   const payersRemaining =
@@ -198,7 +211,14 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
           ? { type: "EQUAL_ALL" as const }
           : splitType === "EQUAL_SELECTED"
             ? { type: "EQUAL_SELECTED" as const, memberIds: [...selected] }
-            : {
+            : splitType === "ITEMIZED"
+              ? {
+                  type: "ITEMIZED" as const,
+                  items: items
+                    .filter((i) => i.name.trim() || num(i.amount) > 0)
+                    .map((i) => ({ name: i.name, amount: num(i.amount), memberIds: [...i.memberIds] })),
+                }
+              : {
                 type: "EXACT" as const,
                 shares: members
                   .map((m) => ({ memberId: m.id, amount: num(exact[m.id] ?? "") }))
@@ -355,6 +375,19 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
             <MemberAmountList members={members} values={exact} onChange={setExact} step={step} meId={meId} />
             {totalMinor > 0 && <RemainingHint remaining={exactRemaining} fmt={fmt} what="montos" />}
           </>
+        ) : splitType === "ITEMIZED" ? (
+          <ItemEditor
+            items={items}
+            onChange={setItems}
+            members={members}
+            meId={meId}
+            step={step}
+            totalMinor={totalMinor}
+            currency={entryCurrency}
+            onUseAsTotal={(minor) => setAmount(String(toMajor(minor, entryCurrency)))}
+            preview={preview}
+            fmtTrip={fmtTrip}
+          />
         ) : (
           <ul className="divide-y rounded-md border">
             {members.map((m) => {
@@ -506,6 +539,157 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
         {pending ? "Guardando…" : "Guardar abono"}
       </Button>
     </form>
+  );
+}
+
+type ItemDraft = { key: number; name: string; amount: string; memberIds: Set<string> };
+
+let itemKey = 0;
+const newItem = (members: MemberLite[]): ItemDraft => ({
+  key: ++itemKey,
+  name: "",
+  amount: "",
+  memberIds: new Set(members.map((m) => m.id)),
+});
+
+/** Ítems con precio y al menos una persona, en unidades mínimas (para la vista previa). */
+const itemsForSplit = (items: ItemDraft[], currency: string) =>
+  items
+    .map((i) => ({ amount: toMinor(num(i.amount), currency), memberIds: [...i.memberIds] }))
+    .filter((i) => i.amount > 0 && i.memberIds.length > 0);
+
+/** División por ítem: cada ítem con su precio y quiénes lo consumieron. */
+function ItemEditor({
+  items,
+  onChange,
+  members,
+  meId,
+  step,
+  totalMinor,
+  currency,
+  onUseAsTotal,
+  preview,
+  fmtTrip,
+}: {
+  items: ItemDraft[];
+  onChange: (items: ItemDraft[]) => void;
+  members: MemberLite[];
+  meId: string;
+  step: string;
+  totalMinor: number;
+  currency: string;
+  onUseAsTotal: (minor: number) => void;
+  preview: Map<string, number>;
+  fmtTrip: (minor: number) => string;
+}) {
+  const fmt = (minor: number) => formatMoney(minor, currency);
+  const update = (key: number, patch: Partial<ItemDraft>) =>
+    onChange(items.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  const itemsSum = items.reduce((a, i) => a + toMinor(num(i.amount), currency), 0);
+  const extra = totalMinor - itemsSum;
+
+  return (
+    <div className="grid gap-2">
+      <ul className="grid gap-2">
+        {items.map((item, idx) => (
+          <li key={item.key} className="grid gap-2 rounded-md border p-2">
+            <div className="flex gap-2">
+              <Input
+                placeholder={`Ítem ${idx + 1} (ej: Pizza)`}
+                aria-label={`Nombre del ítem ${idx + 1}`}
+                className="h-8 min-w-0 flex-1"
+                value={item.name}
+                onChange={(e) => update(item.key, { name: e.target.value })}
+              />
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={step}
+                placeholder="Precio"
+                aria-label={`Precio del ítem ${idx + 1}`}
+                className="h-8 w-28 text-right"
+                value={item.amount}
+                onChange={(e) => update(item.key, { amount: e.target.value })}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0"
+                aria-label={`Quitar ítem ${idx + 1}`}
+                disabled={items.length === 1}
+                onClick={() => onChange(items.filter((i) => i.key !== item.key))}
+              >
+                <X />
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Quiénes consumieron el ítem ${idx + 1}`}>
+              {members.map((m) => {
+                const on = item.memberIds.has(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      const next = new Set(item.memberIds);
+                      if (on) next.delete(m.id);
+                      else next.add(m.id);
+                      update(item.key, { memberIds: next });
+                    }}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                      on ? "border-primary bg-primary/10 text-foreground" : "text-muted-foreground line-through",
+                    )}
+                  >
+                    <Avatar name={m.name} image={m.image} className="size-4" />
+                    {m.id === meId ? "Yo" : m.name}
+                  </button>
+                );
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...items, newItem(members)])}>
+        <Plus /> Agregar ítem
+      </Button>
+
+      {itemsSum > 0 && (
+        <div className="grid gap-1 text-xs">
+          <p className="text-muted-foreground">Suma de los ítems: {fmt(itemsSum)}</p>
+          {totalMinor <= 0 || extra < 0 ? (
+            <p className={cn("flex flex-wrap items-center gap-2", totalMinor > 0 && "text-destructive")}>
+              {totalMinor > 0 ? `Los ítems superan el total por ${fmt(-extra)}` : "Falta el monto total."}
+              <button type="button" className="text-primary font-medium hover:underline" onClick={() => onUseAsTotal(itemsSum)}>
+                Usar {fmt(itemsSum)} como total
+              </button>
+            </p>
+          ) : extra > 0 ? (
+            <p className="text-muted-foreground">
+              Propina y otros cargos ({fmt(extra)}) se reparten en proporción a lo que consumió cada uno.
+            </p>
+          ) : (
+            <p className="text-emerald-600 dark:text-emerald-400">Los ítems cuadran con el total ✓</p>
+          )}
+        </div>
+      )}
+
+      {preview.size > 0 && (
+        <ul className="divide-y rounded-md border">
+          {members
+            .filter((m) => preview.has(m.id))
+            .map((m) => (
+              <li key={m.id} className="flex items-center gap-3 px-3 py-2">
+                <Avatar name={m.name} image={m.image} className="size-6" />
+                <span className="flex-1 truncate text-sm">{m.id === meId ? `${m.name} (yo)` : m.name}</span>
+                <span className="text-muted-foreground text-sm tabular-nums">{fmtTrip(preview.get(m.id)!)}</span>
+              </li>
+            ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

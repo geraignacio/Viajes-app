@@ -79,7 +79,7 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
     const payers = convertRows(originalPayers);
 
     // 2) Cómo se divide → ExpenseSplit[] (suma exacta = total). Partes iguales
-    // se reparten sobre el total ya convertido; montos exactos se validan en la
+    // se reparten sobre el total ya convertido; montos exactos e ítems se validan en la
     // moneda original y luego se convierten.
     let splitInput: SplitInput;
     switch (input.split.type) {
@@ -88,6 +88,12 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
         break;
       case "EQUAL_SELECTED":
         splitInput = { type: "EQUAL_SELECTED", memberIds: input.split.memberIds };
+        break;
+      case "ITEMIZED":
+        splitInput = {
+          type: "ITEMIZED",
+          items: input.split.items.map((i) => ({ amount: toMinor(i.amount, currency), memberIds: i.memberIds })),
+        };
         break;
       case "EXACT":
         splitInput = {
@@ -102,19 +108,25 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
     assertMembers(
       splitInput.type === "EXACT"
         ? splitInput.shares.map((s) => s.memberId)
-        : splitInput.memberIds,
+        : splitInput.type === "ITEMIZED"
+          ? splitInput.items.flatMap((i) => i.memberIds)
+          : splitInput.memberIds,
       "split",
     );
     let splits;
     try {
       splits =
-        splitInput.type === "EXACT"
+        splitInput.type === "EXACT" || splitInput.type === "ITEMIZED"
           ? convertRows(computeSplits(originalTotal, splitInput))
           : computeSplits(total, splitInput);
     } catch {
-      throw new ActionError("Los montos por persona deben sumar el total", {
-        split: ["La suma de los montos exactos debe ser igual al total"],
-      });
+      throw splitInput.type === "ITEMIZED"
+        ? new ActionError("Los ítems suman más que el total del gasto", {
+            split: ["Revisa los precios o el monto total"],
+          })
+        : new ActionError("Los montos por persona deben sumar el total", {
+            split: ["La suma de los montos exactos debe ser igual al total"],
+          });
     }
 
     // 3) Escritura atómica: gasto + pagadores + divisiones.
@@ -133,6 +145,16 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
         createdById: me.id,
         payers: { create: payers },
         splits: { create: splits },
+        ...(input.split.type === "ITEMIZED" && {
+          items: {
+            create: input.split.items.map((i, position) => ({
+              position,
+              name: i.name,
+              amount: toMinor(i.amount, currency),
+              memberIds: i.memberIds,
+            })),
+          },
+        }),
       },
       select: { id: true },
     });

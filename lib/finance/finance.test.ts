@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeSplits, splitEqually } from "./split.ts";
+import { computeSplits, splitByItems, splitEqually } from "./split.ts";
 import { buildBalances } from "./balances.ts";
 import { minimizeTransfers } from "./settlement.ts";
 import { allocateProportional, convertMinor } from "./fx.ts";
@@ -151,4 +151,19 @@ test("moneda extranjera: el reparto proporcional suma exacto", () => {
     assert.equal(r.reduce((a, n) => a + n, 0), total);
     r.forEach((n, j) => assert.ok(n >= 0 && (weights[j] > 0 || n === 0)));
   }
+});
+
+test("por ítem: cada uno paga lo suyo y la propina en proporción", () => {
+  const r = splitByItems(17_600, [
+    { amount: 10_000, memberIds: ["ana", "beto"] },
+    { amount: 6_000, memberIds: ["ana"] },
+  ]);
+  assert.deepEqual(r, [
+    { memberId: "ana", amount: 12_100 },
+    { memberId: "beto", amount: 5_500 },
+  ]);
+  // Sin propina, la suma de los ítems es el total.
+  assert.equal(splitByItems(1_000, [{ amount: 1_000, memberIds: ["a", "b", "c"] }]).reduce((a, s) => a + s.amount, 0), 1_000);
+  // Los ítems no pueden sumar más que el gasto.
+  assert.throws(() => splitByItems(100, [{ amount: 150, memberIds: ["a"] }]));
 });
