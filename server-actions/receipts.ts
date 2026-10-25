@@ -1,7 +1,7 @@
 "use server";
 
 import { requireMember } from "@/lib/access";
-import { ReceiptScanError, scanReceiptImage, isReceiptScanEnabled, type ScannedReceipt } from "@/lib/receipt-scan";
+import { ReceiptScanError, scanReceiptImage, shortDetail, isReceiptScanEnabled, type ScannedReceipt } from "@/lib/receipt-scan";
 import { ActionError, fail, ok, type ActionResult } from "@/lib/action-result";
 
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -24,7 +24,9 @@ export async function scanReceipt(form: FormData): Promise<ActionResult<ScannedR
     } catch (e) {
       console.error("scanReceipt", e);
       throw new ActionError(
-        e instanceof ReceiptScanError ? e.userMessage : "No se pudo leer la boleta. Intenta con otra foto o anótala a mano.",
+        e instanceof ReceiptScanError
+          ? e.userMessage
+          : `No se pudo leer la boleta. Intenta con otra foto o anótala a mano. (Detalle: ${shortDetail(e instanceof Error ? `${e.name} ${e.message}` : String(e))})`,
       );
     }
     if (receipt.total <= 0) throw new ActionError("No encontré el total en la foto. Prueba con más luz y la boleta completa.");
