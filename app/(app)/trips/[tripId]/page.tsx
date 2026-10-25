@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
 import { canActFor } from "@/lib/permissions";
+import { isReceiptScanEnabled } from "@/lib/receipt-scan";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -110,6 +111,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
               currency={trip.currency}
               members={activeMembers}
               meId={me.id}
+              canScan={isReceiptScanEnabled()}
               trigger={
                 <Button size="sm">
                   <Plus /> Registrar

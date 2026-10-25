@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { ArrowRightLeft, Copy, Landmark, Plus, Receipt, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { ArrowRightLeft, Camera, Copy, Landmark, Loader2, Plus, Receipt, X } from "lucide-react";
 import { toast } from "sonner";
 import { createExpense } from "@/server-actions/expenses";
 import { createTransfer } from "@/server-actions/transfers";
 import { fetchExchangeRate } from "@/server-actions/fx";
+import { scanReceipt } from "@/server-actions/receipts";
 import { CATEGORIES, CATEGORY_LABEL, CURRENCIES, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
-import { convertAmount, formatDate, formatMoney, formatRate, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
+import { convertAmount, currencyDigits, formatDate, formatMoney, formatRate, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
 import { splitByItems, splitEqually } from "@/lib/finance/split";
 import { allocateProportional } from "@/lib/finance/fx";
 import { PAYMENT_FIELDS, paymentInfoText } from "@/lib/payment-info";
@@ -32,6 +33,8 @@ type Props = {
   members: MemberLite[];
   meId: string;
   trigger: React.ReactNode;
+  /** Muestra "Escanear boleta" (solo si el servidor tiene GEMINI_API_KEY). */
+  canScan?: boolean;
   defaultTab?: Tab;
   /** Para "Registrar este pago" desde la liquidación (monto en unidades mínimas). */
   transferPreset?: { fromMemberId: string; toMemberId: string; amount: number };
@@ -96,7 +99,7 @@ function readLastCurrency(tripId: string, fallback: string): string {
   }
 }
 
-function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
+function ExpenseForm({ tripId, currency, members, meId, canScan, onDone }: FormProps) {
   // Pagadores posibles: yo, personas sin cuenta y mis hijos/as.
   const payable = members.filter((m) => m.id === meId || m.canActFor);
   const [pending, startTransition] = useTransition();
@@ -122,6 +125,50 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.id)));
   const [exact, setExact] = useState<Record<string, string>>({});
   const [items, setItems] = useState<ItemDraft[]>(() => [newItem(members)]);
+  const receiptInput = useRef<HTMLInputElement>(null);
+  const [scanning, setScanning] = useState(false);
+
+  // Foto de la boleta → Gemini → prellena descripción, monto, moneda, fecha, categoría e ítems.
+  async function onReceipt(file: File) {
+    setScanning(true);
+    try {
+      const form = new FormData();
+      form.set("tripId", tripId);
+      form.set("image", await shrinkImage(file));
+      const res = await scanReceipt(form);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      const r = res.data;
+      const cur = (CURRENCIES as readonly string[]).includes(r.currency.toUpperCase()) ? r.currency.toUpperCase() : entryCurrency;
+      if (cur !== entryCurrency) {
+        setEntryCurrency(cur);
+        setRate("");
+        setRateEdited(false);
+      }
+      const digits = currencyDigits(cur);
+      if (r.title) setTitle(r.title);
+      setAmount(String(Number(r.total.toFixed(digits))));
+      if (/^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.date <= todayISO()) setDate(r.date);
+      setCategory(r.category);
+      if (r.items.length >= 2) {
+        setItems(
+          r.items.map((i) => ({ ...newItem(members), name: i.name, amount: String(Number(i.amount.toFixed(digits))) })),
+        );
+        toast.success(`Boleta leída con ${r.items.length} ítems`, {
+          description: "Revisa los datos. Para que cada uno marque lo suyo, elige \"Por ítem\" en Cómo se divide.",
+        });
+      } else {
+        toast.success("Boleta leída", { description: "Revisa los datos antes de guardar." });
+      }
+    } catch {
+      toast.error("No se pudo leer la boleta");
+    } finally {
+      setScanning(false);
+      if (receiptInput.current) receiptInput.current.value = "";
+    }
+  }
 
   // Los montos del formulario van en la moneda elegida; los saldos, en la del viaje.
   const foreign = entryCurrency !== currency;
@@ -242,6 +289,25 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
 
   return (
     <form onSubmit={submit} className="grid gap-4">
+      {canScan && (
+        <>
+          <input
+            ref={receiptInput}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onReceipt(f);
+            }}
+          />
+          <Button type="button" variant="outline" disabled={scanning} onClick={() => receiptInput.current?.click()}>
+            {scanning ? <Loader2 className="animate-spin" /> : <Camera />}
+            {scanning ? "Leyendo boleta…" : "Escanear boleta"}
+          </Button>
+        </>
+      )}
       <div className="grid gap-2">
         <Label htmlFor="title">Descripción</Label>
         <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Cena en Puerto Natales" required aria-invalid={!!errors.title} />
@@ -540,6 +606,23 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
       </Button>
     </form>
   );
+}
+
+/** Achica la foto (máx. 1600 px, JPEG) para que suba rápido con datos móviles. */
+async function shrinkImage(file: File): Promise<Blob> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    return blob ?? file;
+  } catch {
+    return file;
+  }
 }
 
 type ItemDraft = { key: number; name: string; amount: string; memberIds: Set<string> };

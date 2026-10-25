@@ -37,7 +37,8 @@ auth.ts                          Configuración de Auth.js
 3. **Vercel**: importa el repo y define `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET` (`npx auth secret`), `AUTH_GOOGLE_ID` y `AUTH_GOOGLE_SECRET`.
 4. Deploy. `postinstall` ejecuta `prisma generate` y Vercel usa el script `vercel-build`, que aplica las migraciones pendientes (`prisma migrate deploy`, vía `DIRECT_URL`) antes de `next build`. Si prefieres migrar a mano, cambia el *Build Command* a `next build` y corre `npm run db:deploy` desde tu equipo.
 5. **Fotos del viaje (Google Drive)**: en el mismo proyecto de Google Cloud activa la *Google Drive API* (*APIs & Services → Library*) y agrega el scope `.../auth/drive.file` en la pantalla de consentimiento. Publica la app (*Publishing status → In production*): en modo *Testing* los permisos de Drive caducan a los 7 días. `drive.file` no es un scope sensible, así que no requiere verificación de Google.
-6. **Pausa por inactividad**: Supabase gratis pausa el proyecto tras ~7 días sin uso y el login falla con "Server error". Un cron diario de Vercel (`vercel.json`) llama a `/api/keep-alive` para evitarlo; si igual se pausa, usa *Restore project* en Supabase y vuelve a desplegar.
+6. **Escanear boletas (opcional)**: crea una clave gratuita en [Google AI Studio](https://aistudio.google.com/apikey) y agrégala en Vercel como `GEMINI_API_KEY` (*Settings → Environment Variables*), luego vuelve a desplegar. Sin la clave, el botón "Escanear boleta" no aparece. En el plan gratuito Google puede usar las fotos para mejorar sus modelos; la app no las guarda.
+7. **Pausa por inactividad**: Supabase gratis pausa el proyecto tras ~7 días sin uso y el login falla con "Server error". Un cron diario de Vercel (`vercel.json`) llama a `/api/keep-alive` para evitarlo; si igual se pausa, usa *Restore project* en Supabase y vuelve a desplegar.
 
 ## Desarrollo local
 
