@@ -20,6 +20,9 @@ import { AddGuestForm } from "@/components/trips/add-guest-form";
 import { ExportMenu } from "@/components/trips/export-menu";
 import { InviteCard } from "@/components/trips/invite-card";
 
+// Escanear boletas (Server Action de esta página) puede tardar hasta ~50 s.
+export const maxDuration = 60;
+
 export default async function TripPage({ params }: { params: Promise<{ tripId: string }> }) {
   const { tripId } = await params;
   const user = await requireUser(`/trips/${tripId}`);

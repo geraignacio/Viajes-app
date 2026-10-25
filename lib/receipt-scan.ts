@@ -9,9 +9,16 @@ import { CATEGORIES } from "@/lib/constants";
 // Primero el que se configure; si un modelo no existe o no está disponible
 // para la clave, se prueba el siguiente.
 const MODELS = [
-  ...new Set([process.env.GEMINI_MODEL, "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"].filter(Boolean)),
+  ...new Set(
+    [process.env.GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-2.0-flash"].filter(
+      Boolean,
+    ),
+  ),
 ] as string[];
-const TIMEOUT_MS = 30_000;
+// Tiempo total para leer una boleta (la función de Vercel tiene maxDuration 60 s).
+const DEADLINE_MS = 50_000;
+// Por llamada: si un modelo se cuelga, queda tiempo para probar otro.
+const CALL_TIMEOUT_MS = 22_000;
 
 export const receiptSchema = z.object({
   title: z.string().max(140).catch(""),
@@ -71,12 +78,12 @@ export class ReceiptScanError extends Error {
   }
 }
 
-async function callGemini(model: string, key: string, body: unknown) {
+async function callGemini(model: string, key: string, body: unknown, timeoutMs: number) {
   return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     cache: "no-store",
   });
 }
@@ -100,16 +107,30 @@ export async function scanReceiptImage(base64: string, mimeType: string): Promis
   const key = process.env.GEMINI_API_KEY?.trim();
   if (!key) throw new ReceiptScanError("El escaneo de boletas aún no está configurado", "GEMINI_API_KEY vacía");
   const contents = [{ parts: [{ inline_data: { mime_type: mimeType, data: base64 } }, { text: PROMPT }] }];
-  // Con esquema (respuesta más confiable) y, si el modelo lo rechaza, solo JSON.
+  // Sin "pensar" (los modelos 2.5 piensan por defecto y tardan mucho más) y con
+  // esquema; si el modelo rechaza alguna opción (400), se va quitando.
+  const base = { temperature: 0, responseMimeType: "application/json" };
   const configs = [
-    { temperature: 0, responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA },
-    { temperature: 0, responseMimeType: "application/json" },
+    { ...base, responseSchema: RESPONSE_SCHEMA, thinkingConfig: { thinkingBudget: 0 } },
+    { ...base, responseSchema: RESPONSE_SCHEMA },
+    base,
   ];
+  const deadline = Date.now() + DEADLINE_MS;
 
   let last = "";
-  for (const model of MODELS) {
+  models: for (const model of MODELS) {
     for (const generationConfig of configs) {
-      const res = await callGemini(model, key, { contents, generationConfig });
+      const left = deadline - Date.now();
+      if (left < 3_000) break models;
+      let res: Response;
+      try {
+        res = await callGemini(model, key, { contents, generationConfig }, Math.min(left, CALL_TIMEOUT_MS));
+      } catch (e) {
+        // Tiempo agotado o error de red: se prueba con el modelo siguiente.
+        last = `${model}: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`;
+        console.error("Gemini", last);
+        continue models;
+      }
       const raw = await res.text();
       if (res.ok) {
         const data = JSON.parse(raw) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
@@ -129,8 +150,8 @@ export async function scanReceiptImage(base64: string, mimeType: string): Promis
       if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED|SERVICE_DISABLED/i.test(raw) || res.status === 401 || res.status === 403) {
         throw new ReceiptScanError("La clave de Gemini no es válida. Revisa GEMINI_API_KEY en Vercel.", last);
       }
-      // 404 (modelo inexistente) o 400 por el esquema: probar la siguiente combinación.
-      if (res.status !== 400 && res.status !== 404) break;
+      // 400 (opción no soportada): probar sin ella. 404 u otro: siguiente modelo.
+      if (res.status !== 400) continue models;
     }
   }
   throw new ReceiptScanError(`No se pudo leer la boleta. Intenta con otra foto o anótala a mano. (Detalle: ${shortDetail(last)})`, last);
