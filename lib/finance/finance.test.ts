@@ -164,6 +164,24 @@ test("por ítem: cada uno paga lo suyo y la propina en proporción", () => {
   ]);
   // Sin propina, la suma de los ítems es el total.
   assert.equal(splitByItems(1_000, [{ amount: 1_000, memberIds: ["a", "b", "c"] }]).reduce((a, s) => a + s.amount, 0), 1_000);
-  // Los ítems no pueden sumar más que el gasto.
-  assert.throws(() => splitByItems(100, [{ amount: 150, memberIds: ["a"] }]));
+  // Descuentos: si los ítems suman más que el total, la diferencia se descuenta en proporción.
+  assert.deepEqual(
+    splitByItems(8_000, [
+      { amount: 6_000, memberIds: ["a"] },
+      { amount: 4_000, memberIds: ["b"] },
+    ]),
+    [
+      { memberId: "a", amount: 4_800 },
+      { memberId: "b", amount: 3_200 },
+    ],
+  );
+  assert.equal(
+    splitByItems(138_600, [
+      { amount: 19_600, memberIds: ["a", "b"] },
+      { amount: 66_001, memberIds: ["a", "b", "c"] },
+      { amount: 75_399, memberIds: ["c"] },
+    ]).reduce((a, s) => a + s.amount, 0),
+    138_600,
+  );
+  assert.throws(() => splitByItems(100, [{ amount: 150, memberIds: [] }]));
 });
