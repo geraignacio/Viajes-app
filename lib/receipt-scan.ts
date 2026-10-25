@@ -70,7 +70,13 @@ export const receiptSchema = z.object({
   date: z.string().catch(""),
   category: z.preprocess((v) => (typeof v === "string" ? v.toUpperCase() : v), z.enum(CATEGORIES)).catch("OTHER"),
   items: z
-    .array(z.object({ name: z.string().max(100).catch("Ítem"), amount: z.coerce.number().catch(0) }))
+    .array(
+      z.object({
+        name: z.string().max(100).catch("Ítem"),
+        quantity: z.coerce.number().int().min(1).max(99).catch(1),
+        amount: z.coerce.number().catch(0),
+      }),
+    )
     .catch([])
     .transform((items) => items.filter((i) => i.amount > 0).slice(0, 60)),
 });
@@ -83,7 +89,7 @@ Lee la foto y devuelve:
 - currency: código ISO 4217 de la moneda (CLP, BRL, ARS, USD, EUR...). Deduce por el país, el símbolo o el idioma; "" si no se puede saber.
 - date: fecha de la compra en formato YYYY-MM-DD, o "" si no aparece.
 - category: LODGING (alojamiento), TRANSPORT (vuelos, buses, taxis, combustible, peajes), FOOD (restaurantes, supermercado, bebidas), ACTIVITIES (entradas, tours) u OTHER.
-- items: cada línea de producto con su nombre (incluye la cantidad, ej. "4 Stella Artois Schop") y su monto total de la línea (cantidad × precio), como número sin separadores de miles. No incluyas subtotales, impuestos, propinas ni descuentos como ítems. Lista vacía si no se distinguen.
+- items: cada línea de producto con su nombre SIN la cantidad (ej. "Stella Artois Schop"), quantity (unidades de la línea, ej. 4; 1 si no aparece) y amount, el monto total de la línea (cantidad × precio), como número sin separadores de miles. No incluyas subtotales, impuestos, propinas ni descuentos como ítems. Lista vacía si no se distinguen.
 Los montos en pesos chilenos usan punto como separador de miles: "$19.600" es 19600.
 Si la imagen no es una boleta, devuelve total 0.`;
 
@@ -99,8 +105,8 @@ const RESPONSE_SCHEMA = {
       type: "ARRAY",
       items: {
         type: "OBJECT",
-        properties: { name: { type: "STRING" }, amount: { type: "NUMBER" } },
-        required: ["name", "amount"],
+        properties: { name: { type: "STRING" }, quantity: { type: "INTEGER" }, amount: { type: "NUMBER" } },
+        required: ["name", "quantity", "amount"],
       },
     },
   },
