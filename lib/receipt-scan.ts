@@ -81,6 +81,13 @@ async function callGemini(model: string, key: string, body: unknown) {
   });
 }
 
+/** Motivo breve para mostrar en pantalla (sin datos sensibles: Gemini no repite la clave). */
+export function shortDetail(detail: string): string {
+  const message = detail.match(/"message":\s*"([^"]+)"/)?.[1];
+  const head = detail.split(":")[0];
+  return (message ? `${head}: ${message}` : detail).slice(0, 180);
+}
+
 /** Texto JSON de la respuesta, tolerando ```json ... ``` alrededor. */
 function parseJson(text: string): unknown {
   const clean = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
@@ -126,5 +133,5 @@ export async function scanReceiptImage(base64: string, mimeType: string): Promis
       if (res.status !== 400 && res.status !== 404) break;
     }
   }
-  throw new ReceiptScanError("No se pudo leer la boleta. Intenta con otra foto o anótala a mano.", last);
+  throw new ReceiptScanError(`No se pudo leer la boleta. Intenta con otra foto o anótala a mano. (Detalle: ${shortDetail(last)})`, last);
 }
