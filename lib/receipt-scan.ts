@@ -6,15 +6,58 @@ import { CATEGORIES } from "@/lib/constants";
 // gratuita de https://aistudio.google.com/apikey. La foto se manda a Google
 // solo para leerla; la app no la guarda.
 
-// Primero el que se configure; si un modelo no existe o no está disponible
-// para la clave, se prueba el siguiente.
-const MODELS = [
-  ...new Set(
-    [process.env.GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-2.0-flash"].filter(
-      Boolean,
-    ),
-  ),
-] as string[];
+// Google retira modelos seguido, así que no se fijan en el código: se le
+// pregunta a la API qué modelos "flash" hay (el más nuevo primero) y se usan
+// estos nombres solo si esa consulta falla. GEMINI_MODEL, si está, va primero.
+const FALLBACK_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"];
+const MAX_MODELS = 4;
+const MODELS_TTL_MS = 6 * 3600_000;
+let modelsCache: { at: number; names: string[] } | null = null;
+
+/** Orden: versión más nueva primero; dentro de una versión, estable > preview y normal > lite. */
+export function rankFlashModels(names: string[]): string[] {
+  // "3.10" > "3.8": se compara mayor y menor por separado.
+  const version = (n: string) => {
+    const [major = 0, minor = 0] = (n.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? "0").split(".").map(Number);
+    return major * 1000 + minor;
+  };
+  const penalty = (n: string) => (/preview|exp/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0);
+  return names
+    .filter((n) => /^gemini-[\d.]+-flash/.test(n) && !/image|tts|audio|live|embedding|thinking/.test(n))
+    .sort((a, b) => version(b) - version(a) || penalty(a) - penalty(b) || a.localeCompare(b));
+}
+
+async function availableModels(key: string): Promise<string[]> {
+  if (modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) return modelsCache.names;
+  try {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", {
+      headers: { "x-goog-api-key": key },
+      signal: AbortSignal.timeout(8_000),
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`ListModels ${res.status}`);
+    const data = (await res.json()) as { models?: { name: string; supportedGenerationMethods?: string[] }[] };
+    const names = rankFlashModels(
+      (data.models ?? [])
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.replace(/^models\//, "")),
+    );
+    modelsCache = { at: Date.now(), names };
+    return names;
+  } catch (e) {
+    console.error("Gemini ListModels", e);
+    return [];
+  }
+}
+
+async function candidateModels(key: string): Promise<string[]> {
+  const listed = await availableModels(key);
+  return [...new Set([process.env.GEMINI_MODEL, ...listed.slice(0, 3), ...FALLBACK_MODELS].filter(Boolean))].slice(
+    0,
+    MAX_MODELS,
+  ) as string[];
+}
+
 // Tiempo total para leer una boleta (la función de Vercel tiene maxDuration 60 s).
 const DEADLINE_MS = 50_000;
 // Por llamada: si un modelo se cuelga, queda tiempo para probar otro.
@@ -118,7 +161,9 @@ export async function scanReceiptImage(base64: string, mimeType: string): Promis
   const deadline = Date.now() + DEADLINE_MS;
 
   let last = "";
-  models: for (const model of MODELS) {
+  const tried: string[] = [];
+  models: for (const model of await candidateModels(key)) {
+    tried.push(model);
     for (const generationConfig of configs) {
       const left = deadline - Date.now();
       if (left < 3_000) break models;
@@ -154,5 +199,8 @@ export async function scanReceiptImage(base64: string, mimeType: string): Promis
       if (res.status !== 400) continue models;
     }
   }
-  throw new ReceiptScanError(`No se pudo leer la boleta. Intenta con otra foto o anótala a mano. (Detalle: ${shortDetail(last)})`, last);
+  throw new ReceiptScanError(
+    `No se pudo leer la boleta. Intenta con otra foto o anótala a mano. (Probé: ${tried.join(", ")}. Detalle: ${shortDetail(last)})`,
+    last,
+  );
 }
