@@ -228,7 +228,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
         <FieldError errors={errors.title} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-[3fr_2fr] gap-3 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="amount">Monto total</Label>
           <div className="flex gap-1.5">
@@ -241,7 +241,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
                 setRate("");
                 setRateEdited(false);
               }}
-              className="w-[5.5rem] pl-2"
+              className="w-[4.5rem] pr-7 pl-2"
             >
               {CURRENCIES.map((c) => (
                 <option key={c} value={c}>
