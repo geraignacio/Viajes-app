@@ -152,12 +152,20 @@ function ExpenseForm({ tripId, currency, members, meId, canScan, onDone }: FormP
       setAmount(String(Number(r.total.toFixed(digits))));
       if (/^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.date <= todayISO()) setDate(r.date);
       setCategory(r.category);
-      if (r.items.length >= 2) {
+      if (r.items.length >= 1) {
+        // Cada ítem parte sin nadie marcado: se toca quién lo consumió.
         setItems(
-          r.items.map((i) => ({ ...newItem(members), name: i.name, amount: String(Number(i.amount.toFixed(digits))) })),
+          r.items.map((i) => ({
+            ...newItem(members),
+            name: i.name,
+            qty: i.quantity,
+            amount: String(Number(i.amount.toFixed(digits))),
+            memberIds: new Set<string>(),
+          })),
         );
-        toast.success(`Boleta leída con ${r.items.length} ítems`, {
-          description: "Revisa los datos. Para que cada uno marque lo suyo, elige \"Por ítem\" en Cómo se divide.",
+        setSplitType("ITEMIZED");
+        toast.success(`Boleta leída con ${r.items.length} ${r.items.length === 1 ? "ítem" : "ítems"}`, {
+          description: "En cada ítem toca quién lo consumió. Revisa el total antes de guardar.",
         });
       } else {
         toast.success("Boleta leída", { description: "Revisa los datos antes de guardar." });
@@ -233,6 +241,13 @@ function ExpenseForm({ tripId, currency, members, meId, canScan, onDone }: FormP
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (splitType === "ITEMIZED") {
+      const missing = items.findIndex((i) => num(i.amount) > 0 && i.memberIds.size === 0);
+      if (missing >= 0) {
+        toast.error(`Falta marcar quién consumió "${items[missing].name.trim() || `Ítem ${missing + 1}`}"`);
+        return;
+      }
+    }
     const input = {
       tripId,
       title,
@@ -624,15 +639,30 @@ async function shrinkImage(file: File): Promise<Blob> {
   }
 }
 
-type ItemDraft = { key: number; name: string; amount: string; memberIds: Set<string> };
+type ItemDraft = { key: number; name: string; qty: number; amount: string; memberIds: Set<string> };
 
 let itemKey = 0;
 const newItem = (members: MemberLite[]): ItemDraft => ({
   key: ++itemKey,
   name: "",
+  qty: 1,
   amount: "",
   memberIds: new Set(members.map((m) => m.id)),
 });
+
+/** "4 Schop $19.600" → cuatro ítems de $4.900, para asignar cada unidad a quien la tomó. */
+function splitUnits(item: ItemDraft, currency: string): ItemDraft[] {
+  const total = toMinor(num(item.amount), currency);
+  const base = Math.floor(total / item.qty);
+  const rest = total - base * item.qty;
+  return Array.from({ length: item.qty }, (_, i) => ({
+    key: ++itemKey,
+    name: item.name,
+    qty: 1,
+    amount: String(toMajor(base + (i < rest ? 1 : 0), currency)),
+    memberIds: new Set(item.memberIds),
+  }));
+}
 
 /** Ítems con precio y al menos una persona, en unidades mínimas (para la vista previa). */
 const itemsForSplit = (items: ItemDraft[], currency: string) =>
@@ -674,8 +704,17 @@ function ItemEditor({
     <div className="grid gap-2">
       <ul className="grid gap-2">
         {items.map((item, idx) => (
-          <li key={item.key} className="grid gap-2 rounded-md border p-2">
+          <li
+            key={item.key}
+            className={cn(
+              "grid gap-2 rounded-md border p-2",
+              item.memberIds.size === 0 && num(item.amount) > 0 && "border-amber-500/70",
+            )}
+          >
             <div className="flex gap-2">
+              {item.qty > 1 && (
+                <span className="text-muted-foreground flex h-8 shrink-0 items-center text-sm tabular-nums">{item.qty}×</span>
+              )}
               <Input
                 placeholder={`Ítem ${idx + 1} (ej: Pizza)`}
                 aria-label={`Nombre del ítem ${idx + 1}`}
@@ -707,6 +746,17 @@ function ItemEditor({
               </Button>
             </div>
             <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Quiénes consumieron el ítem ${idx + 1}`}>
+              <button
+                type="button"
+                onClick={() =>
+                  update(item.key, {
+                    memberIds: new Set(item.memberIds.size === members.length ? [] : members.map((m) => m.id)),
+                  })
+                }
+                className="text-primary rounded-full border border-dashed px-2 py-0.5 text-xs font-medium"
+              >
+                {item.memberIds.size === members.length ? "Ninguno" : "Todos"}
+              </button>
               {members.map((m) => {
                 const on = item.memberIds.has(m.id);
                 return (
@@ -731,6 +781,22 @@ function ItemEditor({
                 );
               })}
             </div>
+            {num(item.amount) > 0 && (item.memberIds.size === 0 || item.qty > 1) && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                {item.memberIds.size === 0 && (
+                  <span className="text-amber-700 dark:text-amber-400">Toca quién lo consumió</span>
+                )}
+                {item.qty > 1 && (
+                  <button
+                    type="button"
+                    className="text-primary font-medium hover:underline"
+                    onClick={() => onChange(items.flatMap((i) => (i.key === item.key ? splitUnits(i, currency) : [i])))}
+                  >
+                    Separar en {item.qty} (uno por persona)
+                  </button>
+                )}
+              </div>
+            )}
           </li>
         ))}
       </ul>
