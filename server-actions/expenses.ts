@@ -121,8 +121,8 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
           : computeSplits(total, splitInput);
     } catch {
       throw splitInput.type === "ITEMIZED"
-        ? new ActionError("Los ítems suman más que el total del gasto", {
-            split: ["Revisa los precios o el monto total"],
+        ? new ActionError("Revisa los ítems", {
+            split: ["Cada ítem necesita precio y al menos una persona"],
           })
         : new ActionError("Los montos por persona deben sumar el total", {
             split: ["La suma de los montos exactos debe ser igual al total"],

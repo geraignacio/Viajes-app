@@ -6,19 +6,23 @@ import { CATEGORIES } from "@/lib/constants";
 // gratuita de https://aistudio.google.com/apikey. La foto se manda a Google
 // solo para leerla; la app no la guarda.
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
+// Primero el que se configure; si un modelo no existe o no está disponible
+// para la clave, se prueba el siguiente.
+const MODELS = [
+  ...new Set([process.env.GEMINI_MODEL, "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"].filter(Boolean)),
+] as string[];
 const TIMEOUT_MS = 30_000;
 
 export const receiptSchema = z.object({
   title: z.string().max(140).catch(""),
-  total: z.number().nonnegative().catch(0),
+  total: z.coerce.number().nonnegative().catch(0),
   currency: z.string().max(3).catch(""),
   date: z.string().catch(""),
-  category: z.enum(CATEGORIES).catch("OTHER"),
+  category: z.preprocess((v) => (typeof v === "string" ? v.toUpperCase() : v), z.enum(CATEGORIES)).catch("OTHER"),
   items: z
-    .array(z.object({ name: z.string().max(100), amount: z.number().positive() }))
-    .max(60)
-    .catch([]),
+    .array(z.object({ name: z.string().max(100).catch("Ítem"), amount: z.coerce.number().catch(0) }))
+    .catch([])
+    .transform((items) => items.filter((i) => i.amount > 0).slice(0, 60)),
 });
 export type ScannedReceipt = z.infer<typeof receiptSchema>;
 
@@ -29,7 +33,8 @@ Lee la foto y devuelve:
 - currency: código ISO 4217 de la moneda (CLP, BRL, ARS, USD, EUR...). Deduce por el país, el símbolo o el idioma; "" si no se puede saber.
 - date: fecha de la compra en formato YYYY-MM-DD, o "" si no aparece.
 - category: LODGING (alojamiento), TRANSPORT (vuelos, buses, taxis, combustible, peajes), FOOD (restaurantes, supermercado, bebidas), ACTIVITIES (entradas, tours) u OTHER.
-- items: cada línea de producto con su nombre y su monto total de la línea (cantidad × precio). No incluyas subtotales, impuestos, propinas ni descuentos como ítems. Lista vacía si no se distinguen.
+- items: cada línea de producto con su nombre (incluye la cantidad, ej. "4 Stella Artois Schop") y su monto total de la línea (cantidad × precio), como número sin separadores de miles. No incluyas subtotales, impuestos, propinas ni descuentos como ítems. Lista vacía si no se distinguen.
+Los montos en pesos chilenos usan punto como separador de miles: "$19.600" es 19600.
 Si la imagen no es una boleta, devuelve total 0.`;
 
 const RESPONSE_SCHEMA = {
@@ -39,7 +44,7 @@ const RESPONSE_SCHEMA = {
     total: { type: "NUMBER" },
     currency: { type: "STRING" },
     date: { type: "STRING" },
-    category: { type: "STRING", enum: [...CATEGORIES] },
+    category: { type: "STRING" },
     items: {
       type: "ARRAY",
       items: {
@@ -56,30 +61,70 @@ export function isReceiptScanEnabled() {
   return !!process.env.GEMINI_API_KEY;
 }
 
+/** Error de Gemini con un mensaje apto para la persona y el detalle para los logs. */
+export class ReceiptScanError extends Error {
+  constructor(
+    public userMessage: string,
+    detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+async function callGemini(model: string, key: string, body: unknown) {
+  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    cache: "no-store",
+  });
+}
+
+/** Texto JSON de la respuesta, tolerando ```json ... ``` alrededor. */
+function parseJson(text: string): unknown {
+  const clean = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
+  const start = clean.indexOf("{");
+  const end = clean.lastIndexOf("}");
+  return JSON.parse(start >= 0 && end > start ? clean.slice(start, end + 1) : clean);
+}
+
 export async function scanReceiptImage(base64: string, mimeType: string): Promise<ScannedReceipt> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY no configurada");
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: mimeType, data: base64 } }, { text: PROMPT }] }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json",
-          responseSchema: RESPONSE_SCHEMA,
-        },
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      cache: "no-store",
-    },
-  );
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  return receiptSchema.parse(JSON.parse(text));
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key) throw new ReceiptScanError("El escaneo de boletas aún no está configurado", "GEMINI_API_KEY vacía");
+  const contents = [{ parts: [{ inline_data: { mime_type: mimeType, data: base64 } }, { text: PROMPT }] }];
+  // Con esquema (respuesta más confiable) y, si el modelo lo rechaza, solo JSON.
+  const configs = [
+    { temperature: 0, responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA },
+    { temperature: 0, responseMimeType: "application/json" },
+  ];
+
+  let last = "";
+  for (const model of MODELS) {
+    for (const generationConfig of configs) {
+      const res = await callGemini(model, key, { contents, generationConfig });
+      const raw = await res.text();
+      if (res.ok) {
+        const data = JSON.parse(raw) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+        try {
+          return receiptSchema.parse(parseJson(text));
+        } catch {
+          last = `${model}: respuesta no es JSON: ${text.slice(0, 200)}`;
+          continue;
+        }
+      }
+      last = `${model} ${res.status}: ${raw.slice(0, 400)}`;
+      console.error("Gemini", last);
+      if (res.status === 429) {
+        throw new ReceiptScanError("Se alcanzó el límite gratis de Gemini. Intenta de nuevo en unos minutos.", last);
+      }
+      if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED|SERVICE_DISABLED/i.test(raw) || res.status === 401 || res.status === 403) {
+        throw new ReceiptScanError("La clave de Gemini no es válida. Revisa GEMINI_API_KEY en Vercel.", last);
+      }
+      // 404 (modelo inexistente) o 400 por el esquema: probar la siguiente combinación.
+      if (res.status !== 400 && res.status !== 404) break;
+    }
+  }
+  throw new ReceiptScanError("No se pudo leer la boleta. Intenta con otra foto o anótala a mano.", last);
 }

@@ -31,8 +31,9 @@ export function splitEqually(total: number, memberIds: string[]): SplitRow[] {
 
 /**
  * División por ítem: cada ítem se reparte en partes iguales entre quienes lo
- * marcaron. Lo que sobra entre la suma de los ítems y el total (propina,
- * servicio, impuestos) se reparte en proporción a lo que consumió cada uno.
+ * marcaron. La diferencia entre la suma de los ítems y el total (propina,
+ * servicio e impuestos si es positiva; descuentos si es negativa) se reparte
+ * en proporción a lo que consumió cada uno.
  *   Pizza 10.000 (Ana, Beto) + Vino 6.000 (Ana), total 17.600 con propina
  *   → Ana 11.000 + 1.100 = 12.100, Beto 5.000 + 500 = 5.500
  */
@@ -45,9 +46,7 @@ export function splitByItems(total: number, items: SplitItem[]): SplitRow[] {
   }
   const ids = [...subtotal.keys()].sort();
   const itemsSum = items.reduce((a, i) => a + i.amount, 0);
-  if (ids.length === 0 || itemsSum > total) {
-    throw new Error(`Los ítems suman ${itemsSum}, más que el gasto (${total})`);
-  }
+  if (ids.length === 0 || itemsSum <= 0) throw new Error("Se requiere al menos un ítem con personas");
   const extra = allocateProportional(total - itemsSum, ids.map((id) => subtotal.get(id)!));
   return ids
     .map((memberId, i) => ({ memberId, amount: subtotal.get(memberId)! + extra[i] }))

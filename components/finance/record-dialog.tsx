@@ -741,9 +741,16 @@ function ItemEditor({
       {itemsSum > 0 && (
         <div className="grid gap-1 text-xs">
           <p className="text-muted-foreground">Suma de los ítems: {fmt(itemsSum)}</p>
-          {totalMinor <= 0 || extra < 0 ? (
-            <p className={cn("flex flex-wrap items-center gap-2", totalMinor > 0 && "text-destructive")}>
-              {totalMinor > 0 ? `Los ítems superan el total por ${fmt(-extra)}` : "Falta el monto total."}
+          {totalMinor <= 0 ? (
+            <p className="flex flex-wrap items-center gap-2">
+              Falta el monto total.
+              <button type="button" className="text-primary font-medium hover:underline" onClick={() => onUseAsTotal(itemsSum)}>
+                Usar {fmt(itemsSum)} como total
+              </button>
+            </p>
+          ) : extra < 0 ? (
+            <p className="text-muted-foreground">
+              El total es {fmt(-extra)} menor que los ítems (descuentos): la diferencia se descuenta en proporción a lo que consumió cada uno.{" "}
               <button type="button" className="text-primary font-medium hover:underline" onClick={() => onUseAsTotal(itemsSum)}>
                 Usar {fmt(itemsSum)} como total
               </button>
