@@ -1,7 +1,7 @@
 import { ArrowRightLeft, ExternalLink } from "lucide-react";
 import type { TripDashboard } from "@/lib/trips";
 import { CATEGORY_LABEL, SPLIT_LABEL } from "@/lib/constants";
-import { formatDate, formatMoney } from "@/lib/money";
+import { formatDate, formatMoney, formatRate } from "@/lib/money";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CategoryIcon } from "./category-icon";
 import { DeleteButton } from "./delete-button";
@@ -68,6 +68,11 @@ export function ActivityList({
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-semibold tabular-nums">{fmt(e.amount)}</p>
+                      {e.originalCurrency && e.originalAmount && (
+                        <p className="text-muted-foreground text-xs tabular-nums" title={`1 ${e.originalCurrency} = ${formatRate(e.fxRate ?? 0)} ${trip.currency}`}>
+                          {formatMoney(e.originalAmount, e.originalCurrency)}
+                        </p>
+                      )}
                       <p className="text-muted-foreground text-xs tabular-nums">tu parte {fmt(myShare)}</p>
                     </div>
                     {canDelete && <DeleteButton kind="expense" id={e.id} label={e.title} />}

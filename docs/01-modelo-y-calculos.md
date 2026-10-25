@@ -12,7 +12,7 @@ Archivos de esta etapa:
 | Decisión | Por qué |
 |---|---|
 | Montos como `Int` en unidades mínimas (CLP = pesos, USD = centavos) | Sin errores de punto flotante; `sum(splits) == amount` se verifica con igualdad exacta. `Int` llega a ~2.147 millones de CLP o ~21 millones de USD por registro, suficiente para un viaje (Zod pone el tope). |
-| Una moneda por viaje (`Trip.currency`, ISO 4217) | Simplifica todos los cálculos. Multi-moneda queda como mejora futura (agregar `currency` + `fxRate` en `Expense`). |
+| Una moneda por viaje (`Trip.currency`, ISO 4217) para los saldos | Simplifica todos los cálculos. Un gasto puede anotarse en otra moneda (ej. BRL en un viaje en CLP): al guardarlo se convierte con el tipo de cambio del día (editable) y queda `originalCurrency`, `originalAmount` y `fxRate` como registro. Ver sección 5. |
 | Todo lo financiero apunta a `TripMember`, no a `User` | Los saldos son por viaje, se pueden sumar acompañantes sin cuenta Google (`userId = null`) que luego reclaman su lugar, y alguien puede salir del viaje sin romper el historial. |
 | `ExpensePayer` además de `ExpenseSplit` | Cubre el "pago compartido": una cena de 100.000 donde Ana puso 60.000 y Beto 40.000. Un pagador único es simplemente una fila. |
 | Los splits se guardan ya calculados, también en partes iguales | El historial no cambia si entra o sale gente después. |
@@ -82,3 +82,15 @@ Por qué importa el exacto: con saldos A +7, B −3, C −4, D +6, E −6, el gr
 Verificado con 2.000 casos aleatorios: todas las cuentas quedan en cero, sin montos negativos, y nunca con más de `k − 1` transferencias.
 
 Cuando alguien ejecuta un pago sugerido, se registra como `Transfer` normal; los saldos y la liquidación se recalculan solos.
+
+## 5. Gastos en otra moneda
+
+El formulario permite elegir la moneda del gasto. Si no es la del viaje:
+
+1. Se pide el tipo de cambio del día del gasto (`server-actions/fx.ts` → `lib/fx-rates.ts`) a APIs públicas gratuitas y sin clave: [currency-api](https://github.com/fawazahmed0/exchange-api) (con historial por fecha) y, de respaldo, [open.er-api.com](https://www.exchangerate-api.com/docs/free). Se guarda en caché 6 horas. La persona puede corregirlo con el que le cobró su tarjeta o la casa de cambio.
+2. Pagadores y montos exactos se validan **en la moneda original** (enteros exactos, igual que antes).
+3. `total = round(original × tipo de cambio)` en la moneda del viaje. Pagadores y montos exactos se convierten repartiendo ese total en la misma proporción con el método del mayor resto (`allocateProportional`), así `sum == total` sigue siendo exacto. Partes iguales se calculan directamente sobre el total convertido.
+
+Ejemplo: 150,00 BRL a 172,35 → $25.853 CLP; entre 3 → 8.618 / 8.618 / 8.617.
+
+Como `Expense.amount`, `ExpensePayer` y `ExpenseSplit` quedan en la moneda del viaje, saldos, familias, cuotas y cierre de cuentas no cambian.

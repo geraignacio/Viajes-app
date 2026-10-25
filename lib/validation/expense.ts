@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CATEGORIES } from "@/lib/constants";
+import { CATEGORIES, CURRENCIES } from "@/lib/constants";
 import { id, isoDate, nonNegativeAmount, optionalText, positiveAmount } from "./common";
 
 const memberAmount = z.object({ memberId: id, amount: nonNegativeAmount });
@@ -38,11 +38,21 @@ export const splitSchema = z.discriminatedUnion("type", [
 
 // Las sumas (pagadores y montos exactos == total) se validan en el servidor
 // DESPUÉS de convertir a unidades mínimas, para comparar enteros exactos.
+// Todos los montos vienen en `currency`; el servidor los pasa a la del viaje.
 export const expenseInputSchema = z.object({
   tripId: id,
   title: z.string().trim().min(1, "Ingresa un título").max(140),
   notes: optionalText(1000),
   amount: positiveAmount,
+  // Moneda en que se anotaron los montos (si no se indica, la del viaje). Si es
+  // otra, `fxRate` dice cuánto vale 1 unidad de ella en la moneda del viaje.
+  currency: z.enum(CURRENCIES).optional(),
+  fxRate: z
+    .number({ error: "Tipo de cambio inválido" })
+    .finite()
+    .positive("El tipo de cambio debe ser mayor a 0")
+    .max(10_000_000, "Tipo de cambio demasiado alto")
+    .optional(),
   category: z.enum(CATEGORIES),
   date: isoDate,
   paidBy: paidBySchema,

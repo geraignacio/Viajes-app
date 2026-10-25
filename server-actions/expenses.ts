@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
-import { toMinor } from "@/lib/money";
+import { convertAmount, toMinor } from "@/lib/money";
+import { allocateProportional } from "@/lib/finance/fx";
 import { computeSplits, type SplitInput } from "@/lib/finance/split";
 import { canActFor } from "@/lib/permissions";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
@@ -17,7 +18,14 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
   try {
     const { member: me, trip } = await requireMember(input.tripId);
     if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
-    const currency = trip.currency;
+    // Los montos llegan en `currency` (la del viaje u otra); se validan ahí y
+    // después se convierten a la moneda del viaje, que es la de los saldos.
+    const currency = input.currency ?? trip.currency;
+    const foreign = currency !== trip.currency;
+    if (foreign && !input.fxRate) {
+      throw new ActionError("Falta el tipo de cambio", { fxRate: ["Indica el tipo de cambio"] });
+    }
+    const rate = foreign ? input.fxRate! : 1;
 
     const activeMembers = await prisma.tripMember.findMany({
       where: { tripId: trip.id, leftAt: null },
@@ -33,31 +41,46 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
       }
     };
 
-    const total = toMinor(input.amount, currency);
+    const originalTotal = toMinor(input.amount, currency);
+    const total = foreign ? convertAmount(originalTotal, currency, trip.currency, rate) : originalTotal;
+    if (total <= 0 || total > 2_000_000_000) {
+      throw new ActionError(total <= 0 ? "El monto convertido es demasiado bajo" : "El monto convertido es demasiado alto", {
+        amount: ["Revisa el monto o el tipo de cambio"],
+      });
+    }
+    // Reparte el total convertido en la misma proporción que los montos originales.
+    const convertRows = <T extends { memberId: string; amount: number }>(rows: T[]) => {
+      if (!foreign) return rows;
+      const converted = allocateProportional(total, rows.map((r) => r.amount));
+      return rows.map((r, i) => ({ ...r, amount: converted[i] })).filter((r) => r.amount > 0);
+    };
 
     // 1) Quién pagó → ExpensePayer[] (suma exacta = total).
-    const payers =
+    const originalPayers =
       input.paidBy.mode === "single"
-        ? [{ memberId: input.paidBy.memberId, amount: total }]
+        ? [{ memberId: input.paidBy.memberId, amount: originalTotal }]
         : input.paidBy.payers
             .map((p) => ({ memberId: p.memberId, amount: toMinor(p.amount, currency) }))
             .filter((p) => p.amount > 0);
-    assertMembers(payers.map((p) => p.memberId), "paidBy");
+    assertMembers(originalPayers.map((p) => p.memberId), "paidBy");
     // Solo puedes anotar lo que pagaste tú (o alguien sin cuenta / tu hijo/a).
     const byId = new Map(activeMembers.map((m) => [m.id, m]));
-    if (payers.some((p) => !canActFor(me, byId.get(p.memberId)!))) {
+    if (originalPayers.some((p) => !canActFor(me, byId.get(p.memberId)!))) {
       throw new ActionError("Solo puedes registrar gastos que pagaste tú", {
         paidBy: ["Cada persona con cuenta registra sus propios pagos"],
       });
     }
-    const paidSum = payers.reduce((a, p) => a + p.amount, 0);
-    if (payers.length === 0 || paidSum !== total) {
+    const paidSum = originalPayers.reduce((a, p) => a + p.amount, 0);
+    if (originalPayers.length === 0 || paidSum !== originalTotal) {
       throw new ActionError("Lo pagado no coincide con el total del gasto", {
         paidBy: ["La suma de los pagos debe ser igual al total"],
       });
     }
+    const payers = convertRows(originalPayers);
 
-    // 2) Cómo se divide → ExpenseSplit[] (suma exacta = total).
+    // 2) Cómo se divide → ExpenseSplit[] (suma exacta = total). Partes iguales
+    // se reparten sobre el total ya convertido; montos exactos se validan en la
+    // moneda original y luego se convierten.
     let splitInput: SplitInput;
     switch (input.split.type) {
       case "EQUAL_ALL":
@@ -84,7 +107,10 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
     );
     let splits;
     try {
-      splits = computeSplits(total, splitInput);
+      splits =
+        splitInput.type === "EXACT"
+          ? convertRows(computeSplits(originalTotal, splitInput))
+          : computeSplits(total, splitInput);
     } catch {
       throw new ActionError("Los montos por persona deben sumar el total", {
         split: ["La suma de los montos exactos debe ser igual al total"],
@@ -103,6 +129,7 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
         date: new Date(input.date),
         receiptUrl: input.receiptUrl,
         receiptNote: input.receiptNote,
+        ...(foreign && { originalCurrency: currency, originalAmount: originalTotal, fxRate: rate }),
         createdById: me.id,
         payers: { create: payers },
         splits: { create: splits },

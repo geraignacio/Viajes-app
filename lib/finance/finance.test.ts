@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { computeSplits, splitEqually } from "./split.ts";
 import { buildBalances } from "./balances.ts";
 import { minimizeTransfers } from "./settlement.ts";
+import { allocateProportional, convertMinor } from "./fx.ts";
 
 test("partes iguales: reparte el resto de forma exacta y determinista", () => {
   const r = splitEqually(10_000, ["c", "a", "b"]);
@@ -131,4 +132,23 @@ test("Hijos/as: su saldo se suma al del padre/madre en el cierre", async () => {
   assert.deepEqual(minimizeTransfers(fam), [{ from: "ger", to: "ana", amount: 60_000 }]);
   // Padre/madre que no está en el viaje: responde por sí mismo.
   assert.equal(familyHeads([{ id: "x", parentMemberId: "nadie" }]).get("x"), "x");
+});
+
+test("moneda extranjera: 150 BRL a 172,35 CLP = 25.853 CLP", () => {
+  assert.equal(convertMinor(15_000, 172.35, 2, 0), 25_853);
+  assert.equal(convertMinor(25_853, 1 / 172.35, 0, 2), 15_000);
+});
+
+test("moneda extranjera: el reparto proporcional suma exacto", () => {
+  assert.deepEqual(allocateProportional(25_853, [10_000, 5_000]), [17_235, 8_618]);
+  assert.deepEqual(allocateProportional(100, [1, 1, 1]), [34, 33, 33]);
+  assert.deepEqual(allocateProportional(5_000, [5_000, 0]), [5_000, 0]);
+  for (let i = 0; i < 2_000; i++) {
+    const weights = Array.from({ length: 1 + (i % 7) }, () => Math.floor(Math.random() * 50_000));
+    if (!weights.some((w) => w > 0)) weights[0] = 1;
+    const total = Math.floor(Math.random() * 10_000_000);
+    const r = allocateProportional(total, weights);
+    assert.equal(r.reduce((a, n) => a + n, 0), total);
+    r.forEach((n, j) => assert.ok(n >= 0 && (weights[j] > 0 || n === 0)));
+  }
 });

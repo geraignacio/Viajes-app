@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { ArrowRightLeft, Copy, Landmark, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { createExpense } from "@/server-actions/expenses";
 import { createTransfer } from "@/server-actions/transfers";
-import { CATEGORIES, CATEGORY_LABEL, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
-import { formatMoney, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
+import { fetchExchangeRate } from "@/server-actions/fx";
+import { CATEGORIES, CATEGORY_LABEL, CURRENCIES, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
+import { convertAmount, formatDate, formatMoney, formatRate, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
 import { splitEqually } from "@/lib/finance/split";
 import { PAYMENT_FIELDS, paymentInfoText } from "@/lib/payment-info";
 import type { FieldErrors } from "@/lib/action-result";
@@ -83,6 +84,17 @@ const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
 
 type FormProps = Omit<Props, "trigger" | "defaultTab"> & { onDone: () => void };
 
+// Última moneda usada en cada viaje (en un viaje a Brasil casi todo es en BRL).
+const lastCurrencyKey = (tripId: string) => `viajes:moneda:${tripId}`;
+function readLastCurrency(tripId: string, fallback: string): string {
+  try {
+    const v = localStorage.getItem(lastCurrencyKey(tripId));
+    return v && (CURRENCIES as readonly string[]).includes(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   // Pagadores posibles: yo, personas sin cuenta y mis hijos/as.
   const payable = members.filter((m) => m.id === meId || m.canActFor);
@@ -93,6 +105,10 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("FOOD");
   const [date, setDate] = useState(todayISO);
+  const [entryCurrency, setEntryCurrency] = useState(() => readLastCurrency(tripId, currency));
+  const [rate, setRate] = useState("");
+  const [rateEdited, setRateEdited] = useState(false);
+  const [rateInfo, setRateInfo] = useState<{ status: "loading" | "ok" | "error"; date?: string }>({ status: "ok" });
   const [notes, setNotes] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [receiptNote, setReceiptNote] = useState("");
@@ -105,23 +121,55 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.id)));
   const [exact, setExact] = useState<Record<string, string>>({});
 
-  const totalMinor = toMinor(num(amount), currency);
-  const step = inputStep(currency);
-  const fmt = (minor: number) => formatMoney(minor, currency);
+  // Los montos del formulario van en la moneda elegida; los saldos, en la del viaje.
+  const foreign = entryCurrency !== currency;
+  const totalMinor = toMinor(num(amount), entryCurrency);
+  const step = inputStep(entryCurrency);
+  const fmt = (minor: number) => formatMoney(minor, entryCurrency);
+  const fmtTrip = (minor: number) => formatMoney(minor, currency);
+  const rateValue = num(rate);
+  const convertedMinor = foreign
+    ? rateValue > 0
+      ? convertAmount(totalMinor, entryCurrency, currency, rateValue)
+      : 0
+    : totalMinor;
+
+  // Tipo de cambio del día del gasto; se vuelve a pedir si cambia la fecha,
+  // salvo que la persona lo haya escrito a mano.
+  useEffect(() => {
+    if (!foreign || rateEdited) return;
+    let cancelled = false;
+    setRateInfo({ status: "loading" });
+    fetchExchangeRate({ tripId, currency: entryCurrency, date }).then((res) => {
+      if (cancelled) return;
+      if (res.ok) {
+        setRate(String(Number(res.data.rate.toPrecision(6))));
+        setRateInfo({ status: "ok", date: res.data.date });
+      } else {
+        setRateInfo({ status: "error" });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [foreign, rateEdited, tripId, entryCurrency, date]);
 
   // Vista previa en vivo de cuánto le toca a cada uno (misma función que el servidor).
   const preview = useMemo(() => {
+    // Montos exactos: en la moneda elegida. Partes iguales: lo que queda en la del viaje.
     if (totalMinor <= 0) return new Map<string, number>();
     if (splitType === "EXACT") {
-      return new Map(members.map((m) => [m.id, toMinor(num(exact[m.id] ?? ""), currency)]));
+      return new Map(members.map((m) => [m.id, toMinor(num(exact[m.id] ?? ""), entryCurrency)]));
     }
     const ids = splitType === "EQUAL_ALL" ? members.map((m) => m.id) : [...selected];
-    return ids.length ? new Map(splitEqually(totalMinor, ids).map((s) => [s.memberId, s.amount])) : new Map();
-  }, [totalMinor, splitType, members, selected, exact, currency]);
+    return ids.length && convertedMinor > 0
+      ? new Map(splitEqually(convertedMinor, ids).map((s) => [s.memberId, s.amount]))
+      : new Map();
+  }, [totalMinor, convertedMinor, splitType, members, selected, exact, entryCurrency]);
 
   const exactRemaining = totalMinor - [...preview.values()].reduce((a, b) => a + b, 0);
   const payersRemaining =
-    totalMinor - payable.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), currency), 0);
+    totalMinor - payable.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), entryCurrency), 0);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -130,6 +178,8 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
       title,
       notes,
       amount: num(amount),
+      currency: entryCurrency as (typeof CURRENCIES)[number],
+      fxRate: foreign ? rateValue : undefined,
       category,
       date,
       receiptUrl,
@@ -162,6 +212,9 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
         toast.error(res.error);
         return;
       }
+      try {
+        localStorage.setItem(lastCurrencyKey(tripId), entryCurrency);
+      } catch {}
       toast.success("Gasto registrado");
       onDone();
     });
@@ -177,8 +230,26 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
 
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-2">
-          <Label htmlFor="amount">Monto total ({currency})</Label>
-          <Input id="amount" type="number" inputMode="decimal" min={0} step={step} value={amount} onChange={(e) => setAmount(e.target.value)} required aria-invalid={!!errors.amount} />
+          <Label htmlFor="amount">Monto total</Label>
+          <div className="flex gap-1.5">
+            <Input id="amount" type="number" inputMode="decimal" min={0} step={step} value={amount} onChange={(e) => setAmount(e.target.value)} required aria-invalid={!!errors.amount} className="min-w-0" />
+            <NativeSelect
+              aria-label="Moneda"
+              value={entryCurrency}
+              onChange={(e) => {
+                setEntryCurrency(e.target.value);
+                setRate("");
+                setRateEdited(false);
+              }}
+              className="w-[5.5rem] pl-2"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
           <FieldError errors={errors.amount} />
         </div>
         <div className="grid gap-2">
@@ -186,6 +257,48 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
           <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
         </div>
       </div>
+
+      {foreign && (
+        <div className="bg-muted/50 grid gap-2 rounded-lg border p-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Label htmlFor="fxRate">Tipo de cambio: 1 {entryCurrency} =</Label>
+            <Input
+              id="fxRate"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="any"
+              className="h-8 w-28 text-right"
+              value={rate}
+              placeholder={rateInfo.status === "loading" ? "…" : ""}
+              onChange={(e) => {
+                setRate(e.target.value);
+                setRateEdited(true);
+              }}
+              required
+              aria-invalid={!!errors.fxRate}
+            />
+            <span>{currency}</span>
+          </div>
+          <p className="text-muted-foreground text-xs">
+            {rateInfo.status === "loading"
+              ? "Buscando el tipo de cambio…"
+              : rateInfo.status === "error"
+                ? "No se pudo obtener el tipo de cambio. Escríbelo a mano."
+                : rateEdited
+                  ? "Tipo de cambio escrito a mano."
+                  : rateInfo.date
+                    ? `Tipo de cambio del ${formatDate(rateInfo.date)}. Puedes ajustarlo al que te cobraron.`
+                    : null}
+          </p>
+          {totalMinor > 0 && convertedMinor > 0 && (
+            <p className="text-sm">
+              {fmt(totalMinor)} equivalen a <b className="tabular-nums">{fmtTrip(convertedMinor)}</b>
+            </p>
+          )}
+          <FieldError errors={errors.fxRate} />
+        </div>
+      )}
 
       <div className="grid gap-2">
         <Label htmlFor="category">Categoría</Label>
@@ -267,7 +380,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
                     {m.name}
                   </span>
                   <span className="text-muted-foreground text-sm tabular-nums">
-                    {included && preview.has(m.id) ? fmt(preview.get(m.id)!) : "—"}
+                    {included && preview.has(m.id) ? fmtTrip(preview.get(m.id)!) : "—"}
                   </span>
                 </li>
               );

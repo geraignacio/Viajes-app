@@ -3,7 +3,7 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import type { TripDashboard } from "@/lib/trips";
 import { CATEGORY_LABEL, SPLIT_LABEL } from "@/lib/constants";
-import { formatDate, formatMoney, toMajor } from "@/lib/money";
+import { formatDate, formatMoney, formatRate, toMajor } from "@/lib/money";
 import { installmentStatus } from "@/lib/finance/installments";
 
 type Section = { title: string; head: string[]; rows: (string | number)[][] };
@@ -20,12 +20,15 @@ function buildSections(data: TripDashboard, forCsv: boolean): Section[] {
   return [
     {
       title: "Gastos",
-      head: ["Fecha", "Descripción", "Categoría", "Monto", "Pagado por", "División", "Comprobante"],
+      head: ["Fecha", "Descripción", "Categoría", "Monto", "Monto original", "Pagado por", "División", "Comprobante"],
       rows: expenses.map((e) => [
         date(e.date),
         e.title,
         CATEGORY_LABEL[e.category],
         money(e.amount),
+        e.originalCurrency && e.originalAmount
+          ? `${formatMoney(e.originalAmount, e.originalCurrency)} (1 ${e.originalCurrency} = ${formatRate(e.fxRate ?? 0)} ${trip.currency})`
+          : "",
         e.payers.map((p) => `${name.get(p.memberId)} (${formatMoney(p.amount, trip.currency)})`).join(", "),
         `${SPLIT_LABEL[e.splitType]}: ${e.splits
           .map((s) => `${name.get(s.memberId)} ${formatMoney(s.amount, trip.currency)}`)
