@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeSplits, splitEqually } from "./split.ts";
+import { computeSplits, splitByItems, splitEqually } from "./split.ts";
 import { buildBalances } from "./balances.ts";
 import { minimizeTransfers } from "./settlement.ts";
+import { allocateProportional, convertMinor } from "./fx.ts";
 
 test("partes iguales: reparte el resto de forma exacta y determinista", () => {
   const r = splitEqually(10_000, ["c", "a", "b"]);
@@ -131,4 +132,38 @@ test("Hijos/as: su saldo se suma al del padre/madre en el cierre", async () => {
   assert.deepEqual(minimizeTransfers(fam), [{ from: "ger", to: "ana", amount: 60_000 }]);
   // Padre/madre que no está en el viaje: responde por sí mismo.
   assert.equal(familyHeads([{ id: "x", parentMemberId: "nadie" }]).get("x"), "x");
+});
+
+test("moneda extranjera: 150 BRL a 172,35 CLP = 25.853 CLP", () => {
+  assert.equal(convertMinor(15_000, 172.35, 2, 0), 25_853);
+  assert.equal(convertMinor(25_853, 1 / 172.35, 0, 2), 15_000);
+});
+
+test("moneda extranjera: el reparto proporcional suma exacto", () => {
+  assert.deepEqual(allocateProportional(25_853, [10_000, 5_000]), [17_235, 8_618]);
+  assert.deepEqual(allocateProportional(100, [1, 1, 1]), [34, 33, 33]);
+  assert.deepEqual(allocateProportional(5_000, [5_000, 0]), [5_000, 0]);
+  for (let i = 0; i < 2_000; i++) {
+    const weights = Array.from({ length: 1 + (i % 7) }, () => Math.floor(Math.random() * 50_000));
+    if (!weights.some((w) => w > 0)) weights[0] = 1;
+    const total = Math.floor(Math.random() * 10_000_000);
+    const r = allocateProportional(total, weights);
+    assert.equal(r.reduce((a, n) => a + n, 0), total);
+    r.forEach((n, j) => assert.ok(n >= 0 && (weights[j] > 0 || n === 0)));
+  }
+});
+
+test("por ítem: cada uno paga lo suyo y la propina en proporción", () => {
+  const r = splitByItems(17_600, [
+    { amount: 10_000, memberIds: ["ana", "beto"] },
+    { amount: 6_000, memberIds: ["ana"] },
+  ]);
+  assert.deepEqual(r, [
+    { memberId: "ana", amount: 12_100 },
+    { memberId: "beto", amount: 5_500 },
+  ]);
+  // Sin propina, la suma de los ítems es el total.
+  assert.equal(splitByItems(1_000, [{ amount: 1_000, memberIds: ["a", "b", "c"] }]).reduce((a, s) => a + s.amount, 0), 1_000);
+  // Los ítems no pueden sumar más que el gasto.
+  assert.throws(() => splitByItems(100, [{ amount: 150, memberIds: ["a"] }]));
 });

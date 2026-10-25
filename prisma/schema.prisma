@@ -5,8 +5,9 @@
 //  * Todos los montos se guardan como ENTEROS en unidades mínimas de la moneda
 //    del viaje (CLP: pesos, USD: centavos). Nunca Float. Esto hace que las sumas
 //    sean exactas y que "sum(splits) == amount" se pueda verificar con igualdad.
-//  * Una sola moneda por viaje (Trip.currency, ISO 4217). Los gastos heredan esa
-//    moneda; la conversión multi-moneda queda fuera del alcance del MVP.
+//  * Una moneda por viaje (Trip.currency, ISO 4217) en la que se calculan los
+//    saldos. Un gasto puede anotarse en otra moneda: se convierte al guardarlo
+//    y queda el monto original + tipo de cambio como referencia.
 //  * Los saldos NO se persisten: se derivan siempre de Expense/ExpensePayer/
 //    ExpenseSplit/Transfer (fuente única de verdad, sin desincronización).
 //  * Borrado lógico (deletedAt) en gastos y transferencias para auditoría.
@@ -54,6 +55,7 @@ enum SplitType {
   EQUAL_ALL // Partes iguales entre todos los miembros activos
   EQUAL_SELECTED // Partes iguales entre los seleccionados
   EXACT // Montos exactos por persona
+  ITEMIZED // Por ítem: cada uno marca lo que consumió (ver ExpenseItem)
 }
 
 // -----------------------------------------------------------------------------
@@ -209,25 +211,31 @@ model TripMember {
 }
 
 model Expense {
-  id          String          @id @default(cuid())
-  tripId      String
-  title       String          @db.VarChar(140)
-  notes       String?         @db.VarChar(1000)
-  amount      Int // total en unidades mínimas; > 0
-  category    ExpenseCategory @default(OTHER)
-  splitType   SplitType
-  date        DateTime        @default(now()) @db.Date
-  receiptUrl  String?         @db.VarChar(2048) // enlace al comprobante
-  receiptNote String?         @db.VarChar(500) // n° de boleta, referencia, etc.
-  createdById String
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  deletedAt   DateTime?
+  id               String          @id @default(cuid())
+  tripId           String
+  title            String          @db.VarChar(140)
+  notes            String?         @db.VarChar(1000)
+  amount           Int // total en unidades mínimas; > 0
+  category         ExpenseCategory @default(OTHER)
+  splitType        SplitType
+  date             DateTime        @default(now()) @db.Date
+  receiptUrl       String?         @db.VarChar(2048) // enlace al comprobante
+  receiptNote      String?         @db.VarChar(500) // n° de boleta, referencia, etc.
+  // Gasto en otra moneda (null = moneda del viaje). `amount`, pagadores y
+  // divisiones quedan convertidos; esto es solo el registro de lo original.
+  originalCurrency String?         @db.Char(3)
+  originalAmount   Int? // en unidades mínimas de originalCurrency
+  fxRate           Float? // unidades de la moneda del viaje por 1 de originalCurrency
+  createdById      String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  deletedAt        DateTime?
 
   trip      Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
   createdBy TripMember     @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
   payers    ExpensePayer[] // quién(es) pagaron: sum(amount) == Expense.amount
   splits    ExpenseSplit[] // a quién le corresponde: sum(amount) == Expense.amount
+  items     ExpenseItem[] // solo en división por ítem; los splits ya vienen calculados
 
   // Listado del viaje ordenado por fecha, excluyendo borrados.
   @@index([tripId, deletedAt, date(sort: Desc)])
@@ -261,6 +269,22 @@ model ExpenseSplit {
 
   @@id([expenseId, memberId])
   @@index([memberId])
+}
+
+// Ítem de un gasto dividido por ítem (ej: "Pizza" entre Ana y Beto). Es solo
+// el detalle para mostrar: los montos por persona ya quedan en ExpenseSplit.
+// `amount` va en la moneda en que se anotó el gasto (originalCurrency si la hay).
+model ExpenseItem {
+  id        String   @id @default(cuid())
+  expenseId String
+  position  Int
+  name      String   @db.VarChar(100)
+  amount    Int // > 0, unidades mínimas
+  memberIds String[] // quiénes lo comparten, en partes iguales
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+
+  @@index([expenseId])
 }
 
 // Abono / transferencia directa: "Pagué $X a [integrante]".

@@ -57,7 +57,7 @@ export async function getTripDashboard(tripId: string) {
     prisma.expense.findMany({
       where: { tripId, deletedAt: null },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-      include: { payers: true, splits: true },
+      include: { payers: true, splits: true, items: { orderBy: { position: "asc" } } },
     }),
     prisma.transfer.findMany({
       where: { tripId, deletedAt: null },

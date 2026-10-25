@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/access";
 import { getTripDashboard } from "@/lib/trips";
 import { formatDate } from "@/lib/money";
 import { canActFor } from "@/lib/permissions";
+import { isReceiptScanEnabled } from "@/lib/receipt-scan";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { MemberBalances } from "@/components/finance/member-balances";
 import { RecordDialog } from "@/components/finance/record-dialog";
 import { SettlementList } from "@/components/finance/settlement-list";
 import { SummaryCards } from "@/components/finance/summary-cards";
+import { SpendingCharts } from "@/components/finance/spending-charts";
 import { InstallmentCard } from "@/components/finance/installment-card";
 import { AddGuestForm } from "@/components/trips/add-guest-form";
 import { ExportMenu } from "@/components/trips/export-menu";
@@ -109,6 +111,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
               currency={trip.currency}
               members={activeMembers}
               meId={me.id}
+              canScan={isReceiptScanEnabled()}
               trigger={
                 <Button size="sm">
                   <Plus /> Registrar
@@ -166,6 +169,15 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
             currency={trip.currency}
             meId={me.id}
             readOnly={readOnly}
+          />
+          <SpendingCharts
+            currency={trip.currency}
+            points={expenses.map((e) => ({
+              category: e.category,
+              date: e.date.toISOString().slice(0, 10),
+              amount: e.amount,
+              myShare: e.splits.find((s) => s.memberId === me.id)?.amount ?? 0,
+            }))}
           />
           <ActivityList data={data} meId={me.id} canModerate={canModerate} />
         </div>

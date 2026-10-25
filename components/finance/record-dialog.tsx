@@ -1,13 +1,16 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { ArrowRightLeft, Copy, Landmark, Receipt } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { ArrowRightLeft, Camera, Copy, Landmark, Loader2, Plus, Receipt, X } from "lucide-react";
 import { toast } from "sonner";
 import { createExpense } from "@/server-actions/expenses";
 import { createTransfer } from "@/server-actions/transfers";
-import { CATEGORIES, CATEGORY_LABEL, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
-import { formatMoney, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
-import { splitEqually } from "@/lib/finance/split";
+import { fetchExchangeRate } from "@/server-actions/fx";
+import { scanReceipt } from "@/server-actions/receipts";
+import { CATEGORIES, CATEGORY_LABEL, CURRENCIES, SPLIT_LABEL, SPLIT_TYPES, type Category, type SplitTypeValue } from "@/lib/constants";
+import { convertAmount, currencyDigits, formatDate, formatMoney, formatRate, inputStep, todayISO, toMajor, toMinor } from "@/lib/money";
+import { splitByItems, splitEqually } from "@/lib/finance/split";
+import { allocateProportional } from "@/lib/finance/fx";
 import { PAYMENT_FIELDS, paymentInfoText } from "@/lib/payment-info";
 import type { FieldErrors } from "@/lib/action-result";
 import { cn } from "@/lib/utils";
@@ -30,6 +33,8 @@ type Props = {
   members: MemberLite[];
   meId: string;
   trigger: React.ReactNode;
+  /** Muestra "Escanear boleta" (solo si el servidor tiene GEMINI_API_KEY). */
+  canScan?: boolean;
   defaultTab?: Tab;
   /** Para "Registrar este pago" desde la liquidación (monto en unidades mínimas). */
   transferPreset?: { fromMemberId: string; toMemberId: string; amount: number };
@@ -83,7 +88,18 @@ const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
 
 type FormProps = Omit<Props, "trigger" | "defaultTab"> & { onDone: () => void };
 
-function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
+// Última moneda usada en cada viaje (en un viaje a Brasil casi todo es en BRL).
+const lastCurrencyKey = (tripId: string) => `viajes:moneda:${tripId}`;
+function readLastCurrency(tripId: string, fallback: string): string {
+  try {
+    const v = localStorage.getItem(lastCurrencyKey(tripId));
+    return v && (CURRENCIES as readonly string[]).includes(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function ExpenseForm({ tripId, currency, members, meId, canScan, onDone }: FormProps) {
   // Pagadores posibles: yo, personas sin cuenta y mis hijos/as.
   const payable = members.filter((m) => m.id === meId || m.canActFor);
   const [pending, startTransition] = useTransition();
@@ -93,6 +109,10 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("FOOD");
   const [date, setDate] = useState(todayISO);
+  const [entryCurrency, setEntryCurrency] = useState(() => readLastCurrency(tripId, currency));
+  const [rate, setRate] = useState("");
+  const [rateEdited, setRateEdited] = useState(false);
+  const [rateInfo, setRateInfo] = useState<{ status: "loading" | "ok" | "error"; date?: string }>({ status: "ok" });
   const [notes, setNotes] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [receiptNote, setReceiptNote] = useState("");
@@ -104,24 +124,112 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
   const [splitType, setSplitType] = useState<SplitTypeValue>("EQUAL_ALL");
   const [selected, setSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.id)));
   const [exact, setExact] = useState<Record<string, string>>({});
+  const [items, setItems] = useState<ItemDraft[]>(() => [newItem(members)]);
+  const receiptInput = useRef<HTMLInputElement>(null);
+  const [scanning, setScanning] = useState(false);
 
-  const totalMinor = toMinor(num(amount), currency);
-  const step = inputStep(currency);
-  const fmt = (minor: number) => formatMoney(minor, currency);
+  // Foto de la boleta → Gemini → prellena descripción, monto, moneda, fecha, categoría e ítems.
+  async function onReceipt(file: File) {
+    setScanning(true);
+    try {
+      const form = new FormData();
+      form.set("tripId", tripId);
+      form.set("image", await shrinkImage(file));
+      const res = await scanReceipt(form);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      const r = res.data;
+      const cur = (CURRENCIES as readonly string[]).includes(r.currency.toUpperCase()) ? r.currency.toUpperCase() : entryCurrency;
+      if (cur !== entryCurrency) {
+        setEntryCurrency(cur);
+        setRate("");
+        setRateEdited(false);
+      }
+      const digits = currencyDigits(cur);
+      if (r.title) setTitle(r.title);
+      setAmount(String(Number(r.total.toFixed(digits))));
+      if (/^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.date <= todayISO()) setDate(r.date);
+      setCategory(r.category);
+      if (r.items.length >= 2) {
+        setItems(
+          r.items.map((i) => ({ ...newItem(members), name: i.name, amount: String(Number(i.amount.toFixed(digits))) })),
+        );
+        toast.success(`Boleta leída con ${r.items.length} ítems`, {
+          description: "Revisa los datos. Para que cada uno marque lo suyo, elige \"Por ítem\" en Cómo se divide.",
+        });
+      } else {
+        toast.success("Boleta leída", { description: "Revisa los datos antes de guardar." });
+      }
+    } catch {
+      toast.error("No se pudo leer la boleta");
+    } finally {
+      setScanning(false);
+      if (receiptInput.current) receiptInput.current.value = "";
+    }
+  }
+
+  // Los montos del formulario van en la moneda elegida; los saldos, en la del viaje.
+  const foreign = entryCurrency !== currency;
+  const totalMinor = toMinor(num(amount), entryCurrency);
+  const step = inputStep(entryCurrency);
+  const fmt = (minor: number) => formatMoney(minor, entryCurrency);
+  const fmtTrip = (minor: number) => formatMoney(minor, currency);
+  const rateValue = num(rate);
+  const convertedMinor = foreign
+    ? rateValue > 0
+      ? convertAmount(totalMinor, entryCurrency, currency, rateValue)
+      : 0
+    : totalMinor;
+
+  // Tipo de cambio del día del gasto; se vuelve a pedir si cambia la fecha,
+  // salvo que la persona lo haya escrito a mano.
+  useEffect(() => {
+    if (!foreign || rateEdited) return;
+    let cancelled = false;
+    setRateInfo({ status: "loading" });
+    fetchExchangeRate({ tripId, currency: entryCurrency, date }).then((res) => {
+      if (cancelled) return;
+      if (res.ok) {
+        setRate(String(Number(res.data.rate.toPrecision(6))));
+        setRateInfo({ status: "ok", date: res.data.date });
+      } else {
+        setRateInfo({ status: "error" });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [foreign, rateEdited, tripId, entryCurrency, date]);
 
   // Vista previa en vivo de cuánto le toca a cada uno (misma función que el servidor).
   const preview = useMemo(() => {
+    // Montos exactos: en la moneda elegida. Partes iguales: lo que queda en la del viaje.
     if (totalMinor <= 0) return new Map<string, number>();
     if (splitType === "EXACT") {
-      return new Map(members.map((m) => [m.id, toMinor(num(exact[m.id] ?? ""), currency)]));
+      return new Map(members.map((m) => [m.id, toMinor(num(exact[m.id] ?? ""), entryCurrency)]));
+    }
+    if (splitType === "ITEMIZED") {
+      // Por ítem: se calcula en la moneda elegida y se pasa a la del viaje en proporción.
+      try {
+        const rows = splitByItems(totalMinor, itemsForSplit(items, entryCurrency));
+        if (convertedMinor <= 0) return new Map<string, number>();
+        const amounts = foreign ? allocateProportional(convertedMinor, rows.map((r) => r.amount)) : rows.map((r) => r.amount);
+        return new Map(rows.map((r, i) => [r.memberId, amounts[i]]));
+      } catch {
+        return new Map<string, number>();
+      }
     }
     const ids = splitType === "EQUAL_ALL" ? members.map((m) => m.id) : [...selected];
-    return ids.length ? new Map(splitEqually(totalMinor, ids).map((s) => [s.memberId, s.amount])) : new Map();
-  }, [totalMinor, splitType, members, selected, exact, currency]);
+    return ids.length && convertedMinor > 0
+      ? new Map(splitEqually(convertedMinor, ids).map((s) => [s.memberId, s.amount]))
+      : new Map();
+  }, [totalMinor, convertedMinor, foreign, splitType, members, selected, exact, items, entryCurrency]);
 
   const exactRemaining = totalMinor - [...preview.values()].reduce((a, b) => a + b, 0);
   const payersRemaining =
-    totalMinor - payable.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), currency), 0);
+    totalMinor - payable.reduce((a, m) => a + toMinor(num(payerAmounts[m.id] ?? ""), entryCurrency), 0);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -130,6 +238,8 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
       title,
       notes,
       amount: num(amount),
+      currency: entryCurrency as (typeof CURRENCIES)[number],
+      fxRate: foreign ? rateValue : undefined,
       category,
       date,
       receiptUrl,
@@ -148,7 +258,14 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
           ? { type: "EQUAL_ALL" as const }
           : splitType === "EQUAL_SELECTED"
             ? { type: "EQUAL_SELECTED" as const, memberIds: [...selected] }
-            : {
+            : splitType === "ITEMIZED"
+              ? {
+                  type: "ITEMIZED" as const,
+                  items: items
+                    .filter((i) => i.name.trim() || num(i.amount) > 0)
+                    .map((i) => ({ name: i.name, amount: num(i.amount), memberIds: [...i.memberIds] })),
+                }
+              : {
                 type: "EXACT" as const,
                 shares: members
                   .map((m) => ({ memberId: m.id, amount: num(exact[m.id] ?? "") }))
@@ -162,6 +279,9 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
         toast.error(res.error);
         return;
       }
+      try {
+        localStorage.setItem(lastCurrencyKey(tripId), entryCurrency);
+      } catch {}
       toast.success("Gasto registrado");
       onDone();
     });
@@ -169,16 +289,53 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
 
   return (
     <form onSubmit={submit} className="grid gap-4">
+      {canScan && (
+        <>
+          <input
+            ref={receiptInput}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onReceipt(f);
+            }}
+          />
+          <Button type="button" variant="outline" disabled={scanning} onClick={() => receiptInput.current?.click()}>
+            {scanning ? <Loader2 className="animate-spin" /> : <Camera />}
+            {scanning ? "Leyendo boleta…" : "Escanear boleta"}
+          </Button>
+        </>
+      )}
       <div className="grid gap-2">
         <Label htmlFor="title">Descripción</Label>
         <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Cena en Puerto Natales" required aria-invalid={!!errors.title} />
         <FieldError errors={errors.title} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-[3fr_2fr] gap-3 sm:grid-cols-2">
         <div className="grid gap-2">
-          <Label htmlFor="amount">Monto total ({currency})</Label>
-          <Input id="amount" type="number" inputMode="decimal" min={0} step={step} value={amount} onChange={(e) => setAmount(e.target.value)} required aria-invalid={!!errors.amount} />
+          <Label htmlFor="amount">Monto total</Label>
+          <div className="flex gap-1.5">
+            <Input id="amount" type="number" inputMode="decimal" min={0} step={step} value={amount} onChange={(e) => setAmount(e.target.value)} required aria-invalid={!!errors.amount} className="min-w-0" />
+            <NativeSelect
+              aria-label="Moneda"
+              value={entryCurrency}
+              onChange={(e) => {
+                setEntryCurrency(e.target.value);
+                setRate("");
+                setRateEdited(false);
+              }}
+              className="w-[4.5rem] pr-7 pl-2"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
           <FieldError errors={errors.amount} />
         </div>
         <div className="grid gap-2">
@@ -186,6 +343,48 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
           <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
         </div>
       </div>
+
+      {foreign && (
+        <div className="bg-muted/50 grid gap-2 rounded-lg border p-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Label htmlFor="fxRate">Tipo de cambio: 1 {entryCurrency} =</Label>
+            <Input
+              id="fxRate"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="any"
+              className="h-8 w-28 text-right"
+              value={rate}
+              placeholder={rateInfo.status === "loading" ? "…" : ""}
+              onChange={(e) => {
+                setRate(e.target.value);
+                setRateEdited(true);
+              }}
+              required
+              aria-invalid={!!errors.fxRate}
+            />
+            <span>{currency}</span>
+          </div>
+          <p className="text-muted-foreground text-xs">
+            {rateInfo.status === "loading"
+              ? "Buscando el tipo de cambio…"
+              : rateInfo.status === "error"
+                ? "No se pudo obtener el tipo de cambio. Escríbelo a mano."
+                : rateEdited
+                  ? "Tipo de cambio escrito a mano."
+                  : rateInfo.date
+                    ? `Tipo de cambio del ${formatDate(rateInfo.date)}. Puedes ajustarlo al que te cobraron.`
+                    : null}
+          </p>
+          {totalMinor > 0 && convertedMinor > 0 && (
+            <p className="text-sm">
+              {fmt(totalMinor)} equivalen a <b className="tabular-nums">{fmtTrip(convertedMinor)}</b>
+            </p>
+          )}
+          <FieldError errors={errors.fxRate} />
+        </div>
+      )}
 
       <div className="grid gap-2">
         <Label htmlFor="category">Categoría</Label>
@@ -242,6 +441,19 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
             <MemberAmountList members={members} values={exact} onChange={setExact} step={step} meId={meId} />
             {totalMinor > 0 && <RemainingHint remaining={exactRemaining} fmt={fmt} what="montos" />}
           </>
+        ) : splitType === "ITEMIZED" ? (
+          <ItemEditor
+            items={items}
+            onChange={setItems}
+            members={members}
+            meId={meId}
+            step={step}
+            totalMinor={totalMinor}
+            currency={entryCurrency}
+            onUseAsTotal={(minor) => setAmount(String(toMajor(minor, entryCurrency)))}
+            preview={preview}
+            fmtTrip={fmtTrip}
+          />
         ) : (
           <ul className="divide-y rounded-md border">
             {members.map((m) => {
@@ -267,7 +479,7 @@ function ExpenseForm({ tripId, currency, members, meId, onDone }: FormProps) {
                     {m.name}
                   </span>
                   <span className="text-muted-foreground text-sm tabular-nums">
-                    {included && preview.has(m.id) ? fmt(preview.get(m.id)!) : "—"}
+                    {included && preview.has(m.id) ? fmtTrip(preview.get(m.id)!) : "—"}
                   </span>
                 </li>
               );
@@ -393,6 +605,174 @@ function TransferForm({ tripId, currency, members, meId, transferPreset, onDone 
         {pending ? "Guardando…" : "Guardar abono"}
       </Button>
     </form>
+  );
+}
+
+/** Achica la foto (máx. 1600 px, JPEG) para que suba rápido con datos móviles. */
+async function shrinkImage(file: File): Promise<Blob> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    return blob ?? file;
+  } catch {
+    return file;
+  }
+}
+
+type ItemDraft = { key: number; name: string; amount: string; memberIds: Set<string> };
+
+let itemKey = 0;
+const newItem = (members: MemberLite[]): ItemDraft => ({
+  key: ++itemKey,
+  name: "",
+  amount: "",
+  memberIds: new Set(members.map((m) => m.id)),
+});
+
+/** Ítems con precio y al menos una persona, en unidades mínimas (para la vista previa). */
+const itemsForSplit = (items: ItemDraft[], currency: string) =>
+  items
+    .map((i) => ({ amount: toMinor(num(i.amount), currency), memberIds: [...i.memberIds] }))
+    .filter((i) => i.amount > 0 && i.memberIds.length > 0);
+
+/** División por ítem: cada ítem con su precio y quiénes lo consumieron. */
+function ItemEditor({
+  items,
+  onChange,
+  members,
+  meId,
+  step,
+  totalMinor,
+  currency,
+  onUseAsTotal,
+  preview,
+  fmtTrip,
+}: {
+  items: ItemDraft[];
+  onChange: (items: ItemDraft[]) => void;
+  members: MemberLite[];
+  meId: string;
+  step: string;
+  totalMinor: number;
+  currency: string;
+  onUseAsTotal: (minor: number) => void;
+  preview: Map<string, number>;
+  fmtTrip: (minor: number) => string;
+}) {
+  const fmt = (minor: number) => formatMoney(minor, currency);
+  const update = (key: number, patch: Partial<ItemDraft>) =>
+    onChange(items.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  const itemsSum = items.reduce((a, i) => a + toMinor(num(i.amount), currency), 0);
+  const extra = totalMinor - itemsSum;
+
+  return (
+    <div className="grid gap-2">
+      <ul className="grid gap-2">
+        {items.map((item, idx) => (
+          <li key={item.key} className="grid gap-2 rounded-md border p-2">
+            <div className="flex gap-2">
+              <Input
+                placeholder={`Ítem ${idx + 1} (ej: Pizza)`}
+                aria-label={`Nombre del ítem ${idx + 1}`}
+                className="h-8 min-w-0 flex-1"
+                value={item.name}
+                onChange={(e) => update(item.key, { name: e.target.value })}
+              />
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={step}
+                placeholder="Precio"
+                aria-label={`Precio del ítem ${idx + 1}`}
+                className="h-8 w-28 text-right"
+                value={item.amount}
+                onChange={(e) => update(item.key, { amount: e.target.value })}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0"
+                aria-label={`Quitar ítem ${idx + 1}`}
+                disabled={items.length === 1}
+                onClick={() => onChange(items.filter((i) => i.key !== item.key))}
+              >
+                <X />
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Quiénes consumieron el ítem ${idx + 1}`}>
+              {members.map((m) => {
+                const on = item.memberIds.has(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      const next = new Set(item.memberIds);
+                      if (on) next.delete(m.id);
+                      else next.add(m.id);
+                      update(item.key, { memberIds: next });
+                    }}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                      on ? "border-primary bg-primary/10 text-foreground" : "text-muted-foreground line-through",
+                    )}
+                  >
+                    <Avatar name={m.name} image={m.image} className="size-4" />
+                    {m.id === meId ? "Yo" : m.name}
+                  </button>
+                );
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...items, newItem(members)])}>
+        <Plus /> Agregar ítem
+      </Button>
+
+      {itemsSum > 0 && (
+        <div className="grid gap-1 text-xs">
+          <p className="text-muted-foreground">Suma de los ítems: {fmt(itemsSum)}</p>
+          {totalMinor <= 0 || extra < 0 ? (
+            <p className={cn("flex flex-wrap items-center gap-2", totalMinor > 0 && "text-destructive")}>
+              {totalMinor > 0 ? `Los ítems superan el total por ${fmt(-extra)}` : "Falta el monto total."}
+              <button type="button" className="text-primary font-medium hover:underline" onClick={() => onUseAsTotal(itemsSum)}>
+                Usar {fmt(itemsSum)} como total
+              </button>
+            </p>
+          ) : extra > 0 ? (
+            <p className="text-muted-foreground">
+              Propina y otros cargos ({fmt(extra)}) se reparten en proporción a lo que consumió cada uno.
+            </p>
+          ) : (
+            <p className="text-emerald-600 dark:text-emerald-400">Los ítems cuadran con el total ✓</p>
+          )}
+        </div>
+      )}
+
+      {preview.size > 0 && (
+        <ul className="divide-y rounded-md border">
+          {members
+            .filter((m) => preview.has(m.id))
+            .map((m) => (
+              <li key={m.id} className="flex items-center gap-3 px-3 py-2">
+                <Avatar name={m.name} image={m.image} className="size-6" />
+                <span className="flex-1 truncate text-sm">{m.id === meId ? `${m.name} (yo)` : m.name}</span>
+                <span className="text-muted-foreground text-sm tabular-nums">{fmtTrip(preview.get(m.id)!)}</span>
+              </li>
+            ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
