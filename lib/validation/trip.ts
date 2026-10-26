@@ -2,19 +2,24 @@ import { z } from "zod";
 import { CURRENCIES } from "@/lib/constants";
 import { id, isoDate, optionalText } from "./common";
 
-export const createTripSchema = z
-  .object({
-    name: z.string().trim().min(1, "Ponle un nombre al viaje").max(120),
-    description: optionalText(1000),
-    startDate: isoDate.optional().or(z.literal("").transform(() => undefined)),
-    endDate: isoDate.optional().or(z.literal("").transform(() => undefined)),
-    currency: z.enum(CURRENCIES, { error: "Moneda no soportada" }),
-  })
-  .refine((t) => !t.startDate || !t.endDate || t.endDate >= t.startDate, {
-    path: ["endDate"],
-    error: "La fecha de término debe ser posterior al inicio",
-  });
+const tripFields = z.object({
+  name: z.string().trim().min(1, "Ponle un nombre al viaje").max(120),
+  description: optionalText(1000),
+  startDate: isoDate.optional().or(z.literal("").transform(() => undefined)),
+  endDate: isoDate.optional().or(z.literal("").transform(() => undefined)),
+});
+
+const datesInOrder = (t: { startDate?: string; endDate?: string }) =>
+  !t.startDate || !t.endDate || t.endDate >= t.startDate;
+const datesError = { path: ["endDate"], error: "La fecha de término debe ser posterior al inicio" };
+
+export const createTripSchema = tripFields
+  .extend({ currency: z.enum(CURRENCIES, { error: "Moneda no soportada" }) })
+  .refine(datesInOrder, datesError);
 export type CreateTripInput = z.input<typeof createTripSchema>;
+
+/** La moneda no se edita: todos los montos del viaje están guardados en ella. */
+export const updateTripSchema = tripFields.extend({ tripId: id }).refine(datesInOrder, datesError);
 
 export const joinTripSchema = z.object({
   code: z
