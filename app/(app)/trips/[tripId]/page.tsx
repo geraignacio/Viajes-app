@@ -17,6 +17,7 @@ import { SummaryCards } from "@/components/finance/summary-cards";
 import { SpendingCharts } from "@/components/finance/spending-charts";
 import { InstallmentCard } from "@/components/finance/installment-card";
 import { AddGuestForm } from "@/components/trips/add-guest-form";
+import { EditTripDialog } from "@/components/trips/edit-trip-dialog";
 import { ExportMenu } from "@/components/trips/export-menu";
 import { InviteCard } from "@/components/trips/invite-card";
 
@@ -108,6 +109,17 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
             </Link>
           </Button>
           <ExportMenu tripId={trip.id} />
+          {!readOnly && canModerate && (
+            <EditTripDialog
+              trip={{
+                id: trip.id,
+                name: trip.name,
+                description: trip.description,
+                startDate: trip.startDate?.toISOString().slice(0, 10) ?? null,
+                endDate: trip.endDate?.toISOString().slice(0, 10) ?? null,
+              }}
+            />
+          )}
           {!readOnly && (
             <RecordDialog
               tripId={trip.id}

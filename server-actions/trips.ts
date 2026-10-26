@@ -8,7 +8,7 @@ import { requireMember, getSessionUser } from "@/lib/access";
 import { generateInviteCode } from "@/lib/invite";
 import { syncFolderSharing } from "@/lib/google-drive";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
-import { addGuestSchema, createTripSchema, joinTripSchema } from "@/lib/validation/trip";
+import { addGuestSchema, createTripSchema, joinTripSchema, updateTripSchema } from "@/lib/validation/trip";
 
 const isUniqueViolation = (e: unknown) =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
@@ -51,6 +51,32 @@ export async function createTrip(raw: unknown): Promise<ActionResult<{ id: strin
       }
     }
     throw new ActionError("No se pudo generar el código de invitación");
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Corrige nombre, descripción o fechas. Solo organizador/a. */
+export async function updateTrip(raw: unknown): Promise<ActionResult<undefined>> {
+  const parsed = updateTripSchema.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  const { tripId, ...input } = parsed.data;
+  try {
+    const { member } = await requireMember(tripId);
+    if (member.role === "MEMBER") throw new ActionError("Solo el organizador puede hacerlo");
+    await prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        name: input.name,
+        // null (no undefined) para que vaciar el campo borre el valor.
+        description: input.description ?? null,
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        endDate: input.endDate ? new Date(input.endDate) : null,
+      },
+    });
+    revalidatePath("/trips");
+    revalidatePath(`/trips/${tripId}`);
+    return ok(undefined);
   } catch (e) {
     return fail(e);
   }
