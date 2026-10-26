@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import { InstallPrompt } from "@/components/install-prompt";
+import { ThemeColorSync } from "@/components/theme-color-sync";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es" suppressHydrationWarning>
       <body className="min-h-dvh font-sans">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <ThemeColorSync />
           {children}
           <Toaster richColors position="top-center" />
           <InstallPrompt />
