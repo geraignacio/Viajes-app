@@ -345,3 +345,12 @@ model TripPhoto {
   @@index([tripId, createdAt(sort: Desc)])
   @@index([uploadedById])
 }
+
+// Una sola fila (id = 1) que el cron diario de /api/keep-alive actualiza.
+// Supabase (plan gratis) no cuenta un simple `SELECT 1` como actividad
+// suficiente; una escritura real sí.
+model KeepAlive {
+  id       Int      @id
+  pingedAt DateTime
+  count    Int      @default(0)
+}
