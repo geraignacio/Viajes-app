@@ -76,3 +76,29 @@ export async function deleteTransfer(raw: unknown): Promise<ActionResult<undefin
     return fail(e);
   }
 }
+
+/** Deshacer un borrado reciente (mismos permisos que para borrar). */
+export async function restoreTransfer(raw: unknown): Promise<ActionResult<undefined>> {
+  const parsed = deleteByIdSchema.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  try {
+    const transfer = await prisma.transfer.findUnique({
+      where: { id: parsed.data.id },
+      select: { tripId: true, createdById: true, fromMemberId: true, deletedAt: true },
+    });
+    if (!transfer) throw new ActionError("El abono no existe");
+    if (!transfer.deletedAt) return ok(undefined);
+    const { member, trip } = await requireMember(transfer.tripId);
+    if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
+    const canRestore =
+      member.role !== "MEMBER" ||
+      member.id === transfer.createdById ||
+      member.id === transfer.fromMemberId;
+    if (!canRestore) throw new ActionError("No puedes recuperar este abono");
+    await prisma.transfer.update({ where: { id: parsed.data.id }, data: { deletedAt: null } });
+    revalidatePath(`/trips/${transfer.tripId}`);
+    return ok(undefined);
+  } catch (e) {
+    return fail(e);
+  }
+}

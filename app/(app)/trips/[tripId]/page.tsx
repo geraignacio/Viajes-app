@@ -10,6 +10,7 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ActivityList } from "@/components/finance/activity-list";
+import { PaymentsList } from "@/components/finance/payments-list";
 import { MemberBalances } from "@/components/finance/member-balances";
 import { RecordDialog } from "@/components/finance/record-dialog";
 import { SettlementList } from "@/components/finance/settlement-list";
@@ -185,6 +186,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
             meId={me.id}
             readOnly={readOnly}
           />
+          <PaymentsList data={data} meId={me.id} canModerate={canModerate} />
           <SpendingCharts
             currency={trip.currency}
             points={expenses.map((e) => ({

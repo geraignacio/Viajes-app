@@ -190,3 +190,27 @@ export async function deleteExpense(raw: unknown): Promise<ActionResult<undefine
     return fail(e);
   }
 }
+
+/** Deshacer un borrado reciente (mismos permisos que para borrar). */
+export async function restoreExpense(raw: unknown): Promise<ActionResult<undefined>> {
+  const parsed = deleteByIdSchema.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  try {
+    const expense = await prisma.expense.findUnique({
+      where: { id: parsed.data.id },
+      select: { tripId: true, createdById: true, deletedAt: true },
+    });
+    if (!expense) throw new ActionError("El gasto no existe");
+    if (!expense.deletedAt) return ok(undefined);
+    const { member, trip } = await requireMember(expense.tripId);
+    if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
+    if (member.role === "MEMBER" && member.id !== expense.createdById) {
+      throw new ActionError("Solo quien registró el gasto o el organizador pueden recuperarlo");
+    }
+    await prisma.expense.update({ where: { id: parsed.data.id }, data: { deletedAt: null } });
+    revalidatePath(`/trips/${expense.tripId}`);
+    return ok(undefined);
+  } catch (e) {
+    return fail(e);
+  }
+}
