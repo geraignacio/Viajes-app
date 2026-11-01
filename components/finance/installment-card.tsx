@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { CalendarClock, CheckCircle2, Circle, CircleDot, Trash2, RefreshCw } from "lucide-react";
+import { CalendarClock, CheckCircle2, Circle, CircleDot, Trash2, RefreshCw, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { deleteInstallmentPlan, saveInstallmentPlan } from "@/server-actions/installments";
 import { installmentStatus, splitInstallments } from "@/lib/finance/installments";
@@ -31,15 +31,45 @@ type Props = {
   plan: PlanData | null;
   /** A quién le pago según el cierre de cuentas (el mayor acreedor). */
   payToId: string | null;
+  /** A quién le debo y cuánto, según el cierre de cuentas (mayor primero). */
+  creditors: { name: string; amount: number }[];
 };
 
 /** "Voy a pagar mi deuda en N cuotas": arma el plan y muestra el avance. */
-export function InstallmentCard({ tripId, currency, members, meId, remaining, contributed, plan, payToId }: Props) {
+export function InstallmentCard({ tripId, currency, members, meId, remaining, contributed, plan, payToId, creditors }: Props) {
   const fmt = (n: number) => formatMoney(n, currency);
   const [pending, startTransition] = useTransition();
   const [n, setN] = useState(plan?.installments ?? 6);
   const [first, setFirst] = useState(plan?.firstDueDate ?? todayISO());
   const [editing, setEditing] = useState(false);
+  const payToName = members.find((m) => m.id === payToId)?.name;
+
+  // A quién se le pagan las cuotas (puede ser más de una persona).
+  const payTo =
+    creditors.length > 0 ? (
+      <div className="bg-muted/60 flex items-start gap-2 rounded-lg p-3 text-sm">
+        <UserRound className="text-primary mt-0.5 size-4 shrink-0" />
+        <div className="min-w-0">
+          {creditors.length === 1 ? (
+            <p>
+              Le pagas a <b>{creditors[0].name}</b>
+            </p>
+          ) : (
+            <>
+              <p>Le pagas a:</p>
+              <ul className="mt-1 space-y-0.5">
+                {creditors.map((c) => (
+                  <li key={c.name} className="flex justify-between gap-3">
+                    <b className="truncate">{c.name}</b>
+                    <span className="tabular-nums">{fmt(c.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
+    ) : null;
 
   function save(installments = n, firstDueDate = first) {
     startTransition(async () => {
@@ -70,6 +100,7 @@ export function InstallmentCard({ tripId, currency, members, meId, remaining, co
           <CardDescription>Divide lo que te queda por pagar ({fmt(remaining)}) en cuotas mensuales.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {payTo}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label htmlFor="inst-n">Número de cuotas</Label>
@@ -145,6 +176,7 @@ export function InstallmentCard({ tripId, currency, members, meId, remaining, co
       </CardHeader>
       <CardContent className="space-y-4">
         <Progress value={status.paidSinceStart / plan.baseAmount} />
+        {payTo}
 
         {status.outdated && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
@@ -185,7 +217,12 @@ export function InstallmentCard({ tripId, currency, members, meId, remaining, co
             meId={meId}
             defaultTab="transfer"
             transferPreset={{ fromMemberId: meId, toMemberId: payToId, amount: nextAmount }}
-            trigger={<Button className="w-full">Registrar pago de la cuota {status.next?.n}</Button>}
+            trigger={
+              <Button className="w-full">
+                Registrar pago de la cuota {status.next?.n}
+                {payToName && ` a ${payToName}`}
+              </Button>
+            }
           />
         )}
       </CardContent>
