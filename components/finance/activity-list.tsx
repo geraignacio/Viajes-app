@@ -102,7 +102,7 @@ export function ActivityList({
                         )}
                         <p className="text-muted-foreground text-xs tabular-nums">tu parte {fmt(myShare)}</p>
                       </div>
-                      {canDelete && <DeleteButton kind="expense" id={e.id} label={e.title} />}
+                      {canDelete && <DeleteButton kind="expense" id={e.id} label={e.title} details={`${e.title}: ${fmt(e.amount)} (${formatDate(e.date)})`} />}
                     </li>
                   ),
                 };
@@ -130,7 +130,12 @@ export function ActivityList({
                       </p>
                     </div>
                     <p className="text-sm font-semibold tabular-nums">{fmt(t.amount)}</p>
-                    {canDelete && <DeleteButton kind="transfer" id={t.id} label="este abono" />}
+                    {canDelete && <DeleteButton
+                        kind="transfer"
+                        id={t.id}
+                        label="este pago"
+                        details={`${name.get(t.fromMemberId)} → ${name.get(t.toMemberId)}: ${fmt(t.amount)} (${formatDate(t.date)})`}
+                      />}
                   </li>
                 ),
               };
