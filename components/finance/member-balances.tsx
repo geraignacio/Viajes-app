@@ -30,6 +30,7 @@ export function MemberBalances({
   canModerate,
   readOnly,
   footer,
+  payToNames,
 }: {
   tripId: string;
   members: Row[];
@@ -41,6 +42,8 @@ export function MemberBalances({
   canModerate: boolean;
   readOnly?: boolean;
   footer?: React.ReactNode;
+  /** A quién le paga cada familia sus cuotas (nombres según el cierre de cuentas). */
+  payToNames?: Map<string, string[]>;
 }) {
   const fmt = (n: number) => formatMoney(n, currency);
   const ids = new Set(members.map((m) => m.id));
@@ -153,6 +156,9 @@ export function MemberBalances({
                 <p className="text-primary text-xs">
                   Plan en {head.planSummary.installments} cuotas de {fmt(plan.perInstallment)} ·{" "}
                   {plan.completed ? "completado" : `${plan.paidCount}/${head.planSummary.installments} pagadas`}
+                  {!plan.completed && payToNames?.get(head.id)?.length
+                    ? ` · le paga a ${payToNames.get(head.id)!.join(" y ")}`
+                    : ""}
                 </p>
               )}
             </div>

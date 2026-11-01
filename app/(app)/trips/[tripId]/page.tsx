@@ -80,6 +80,12 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
   const payToId = settlement.filter((s) => s.from === me.id).sort((a, b) => b.amount - a.amount)[0]?.to ?? null;
   // Quien salió del viaje (con saldo en cero) solo queda en el historial.
   const activeMembers = allMembers.filter((m) => m.active);
+  // Para cada familia que debe: a quiénes les paga (mayor deuda primero).
+  const payToNames = new Map<string, string[]>();
+  for (const s of [...settlement].sort((a, b) => b.amount - a.amount)) {
+    const to = trip.members.find((m) => m.id === s.to)?.displayName ?? "";
+    payToNames.set(s.from, [...(payToNames.get(s.from) ?? []), to]);
+  }
 
   return (
     <div className="space-y-6">
@@ -173,6 +179,10 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
           contributed={myBalance.contributed}
           plan={myPlan}
           payToId={payToId}
+          creditors={settlement
+            .filter((s) => s.from === me.id)
+            .sort((a, b) => b.amount - a.amount)
+            .map((s) => ({ name: familyName(s.to), amount: s.amount }))}
         />
       )}
 
@@ -209,6 +219,7 @@ export default async function TripPage({ params }: { params: Promise<{ tripId: s
             canModerate={canModerate}
             readOnly={readOnly}
             footer={!readOnly && <AddGuestForm tripId={trip.id} />}
+            payToNames={payToNames}
           />
           {!readOnly && <InviteCard tripId={trip.id} code={trip.inviteCode} canRegenerate={canModerate} />}
         </div>
