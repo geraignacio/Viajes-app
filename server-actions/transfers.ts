@@ -7,7 +7,9 @@ import { toMinor } from "@/lib/money";
 import { canActFor } from "@/lib/permissions";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { deleteByIdSchema } from "@/lib/validation/expense";
-import { transferInputSchema } from "@/lib/validation/transfer";
+import { settleExpenseSchema, transferInputSchema } from "@/lib/validation/transfer";
+import { expenseDebts } from "@/lib/finance/expense-debts";
+import { familyHeads } from "@/lib/finance/families";
 
 /** "Pagué $X a [integrante]". */
 export async function createTransfer(raw: unknown): Promise<ActionResult<{ id: string }>> {
@@ -43,6 +45,70 @@ export async function createTransfer(raw: unknown): Promise<ActionResult<{ id: s
         createdById: me.id,
       },
       select: { id: true },
+    });
+    revalidatePath(`/trips/${trip.id}`);
+    return ok(transfer);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * "Saldar" la deuda de un gasto: registra un abono de `from` a `to` por lo que
+ * falta de ESE gasto, ligado al gasto. Para los saldos es un abono normal.
+ */
+export async function settleExpenseDebt(raw: unknown): Promise<ActionResult<{ id: string; amount: number }>> {
+  const parsed = settleExpenseSchema.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  const input = parsed.data;
+
+  try {
+    const expense = await prisma.expense.findUnique({
+      where: { id: input.expenseId },
+      select: {
+        tripId: true,
+        title: true,
+        deletedAt: true,
+        payers: { select: { memberId: true, amount: true } },
+        splits: { select: { memberId: true, amount: true } },
+        transfers: {
+          where: { deletedAt: null },
+          select: { fromMemberId: true, toMemberId: true, amount: true },
+        },
+      },
+    });
+    if (!expense || expense.deletedAt) throw new ActionError("El gasto no existe");
+    const { member: me, trip } = await requireMember(expense.tripId);
+    if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
+
+    const members = await prisma.tripMember.findMany({
+      where: { tripId: trip.id },
+      select: { id: true, userId: true, parentMemberId: true },
+    });
+    const from = members.find((m) => m.id === input.fromMemberId);
+    if (!from) throw new ActionError("Integrante inválido");
+    if (!canActFor(me, from) && input.toMemberId !== me.id) {
+      throw new ActionError("Solo puedes saldar deudas tuyas o que te deben a ti");
+    }
+
+    const debt = expenseDebts(expense.payers, expense.splits, expense.transfers, familyHeads(members)).find(
+      (d) => d.from === input.fromMemberId && d.to === input.toMemberId,
+    );
+    if (!debt) throw new ActionError("No hay deuda entre estas personas en este gasto");
+    if (debt.remaining <= 0) throw new ActionError("Esta deuda ya está saldada");
+
+    const transfer = await prisma.transfer.create({
+      data: {
+        tripId: trip.id,
+        fromMemberId: debt.from,
+        toMemberId: debt.to,
+        amount: debt.remaining,
+        date: new Date(new Date().toLocaleDateString("en-CA", { timeZone: "America/Santiago" })),
+        note: `Saldo de ${expense.title}`.slice(0, 500),
+        expenseId: input.expenseId,
+        createdById: me.id,
+      },
+      select: { id: true, amount: true },
     });
     revalidatePath(`/trips/${trip.id}`);
     return ok(transfer);

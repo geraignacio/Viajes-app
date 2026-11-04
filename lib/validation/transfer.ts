@@ -15,3 +15,5 @@ export const transferInputSchema = z
     error: "No puedes registrar un abono a ti mismo",
   });
 export type TransferInput = z.input<typeof transferInputSchema>;
+
+export const settleExpenseSchema = z.object({ expenseId: id, fromMemberId: id, toMemberId: id });

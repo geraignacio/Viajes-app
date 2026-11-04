@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getTripBalances, type MemberBalance } from "@/lib/finance/balances";
 import { minimizeTransfers, type Settlement } from "@/lib/finance/settlement";
 import { familyBalances, familyHeads } from "@/lib/finance/families";
+import { expenseDebts, type ExpenseDebt } from "@/lib/finance/expense-debts";
 
 export type TripStatus = "active" | "past";
 
@@ -75,5 +76,23 @@ export async function getTripDashboard(tripId: string) {
   // Solo cabezas de familia; para quien no tiene hijos es igual a su saldo propio.
   const familyBalanceById = new Map<string, MemberBalance>(families.map((b) => [b.memberId, b]));
 
-  return { trip, balances, balanceById, familyBalanceById, headOf, expenses, transfers, settlement, totalSpent };
+  // Deuda de cada gasto (quién le debe a quién solo por ese registro).
+  const linked = new Map<string, typeof transfers>();
+  for (const t of transfers) if (t.expenseId) linked.set(t.expenseId, [...(linked.get(t.expenseId) ?? []), t]);
+  const debtsByExpense = new Map<string, ExpenseDebt[]>(
+    expenses.map((e) => [e.id, expenseDebts(e.payers, e.splits, linked.get(e.id) ?? [], headOf)]),
+  );
+
+  return {
+    trip,
+    balances,
+    balanceById,
+    familyBalanceById,
+    headOf,
+    expenses,
+    transfers,
+    settlement,
+    totalSpent,
+    debtsByExpense,
+  };
 }
