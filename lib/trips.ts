@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { getTripBalances, type MemberBalance } from "@/lib/finance/balances";
 import { minimizeTransfers, type Settlement } from "@/lib/finance/settlement";
 import { familyBalances, familyHeads } from "@/lib/finance/families";
-import { expenseDebts, type ExpenseDebt } from "@/lib/finance/expense-debts";
+import { applyGeneralPayments, expenseDebts, type ExpenseDebt } from "@/lib/finance/expense-debts";
 
 export type TripStatus = "active" | "past";
 
@@ -81,6 +81,13 @@ export async function getTripDashboard(tripId: string) {
   for (const t of transfers) if (t.expenseId) linked.set(t.expenseId, [...(linked.get(t.expenseId) ?? []), t]);
   const debtsByExpense = new Map<string, ExpenseDebt[]>(
     expenses.map((e) => [e.id, expenseDebts(e.payers, e.splits, linked.get(e.id) ?? [], headOf)]),
+  );
+  // Pagos generales (sin "Saldar") cubren los gastos más antiguos primero, para
+  // que lo pendiente por gasto cuadre con la deuda total. `expenses` viene del más nuevo al más antiguo.
+  applyGeneralPayments(
+    [...expenses].reverse().map((e) => debtsByExpense.get(e.id)!),
+    (h) => familyBalanceById.get(h)?.remaining ?? 0,
+    headOf,
   );
 
   return {

@@ -4,7 +4,7 @@ import { computeSplits, splitByItems, splitEqually } from "./split.ts";
 import { buildBalances } from "./balances.ts";
 import { minimizeTransfers } from "./settlement.ts";
 import { allocateProportional, convertMinor } from "./fx.ts";
-import { expenseDebts } from "./expense-debts.ts";
+import { applyGeneralPayments, expenseDebts } from "./expense-debts.ts";
 
 test("partes iguales: reparte el resto de forma exacta y determinista", () => {
   const r = splitEqually(10_000, ["c", "a", "b"]);
@@ -194,8 +194,8 @@ test("deuda por gasto: Ana paga 30.000 entre 3 → Beto y Carla le deben 10.000 
     [{ fromMemberId: "beto", toMemberId: "ana", amount: 10_000 }],
   );
   assert.deepEqual(d, [
-    { from: "beto", to: "ana", amount: 10_000, paid: 10_000, remaining: 0 },
-    { from: "carla", to: "ana", amount: 10_000, paid: 0, remaining: 10_000 },
+    { from: "beto", to: "ana", amount: 10_000, paid: 10_000, covered: 0, remaining: 0 },
+    { from: "carla", to: "ana", amount: 10_000, paid: 0, covered: 0, remaining: 10_000 },
   ]);
 });
 
@@ -221,4 +221,15 @@ test("deuda por gasto: no muestra deudas dentro de la familia", () => {
     new Map([["hijo", "papa"]]),
   );
   assert.deepEqual(d.map((x) => x.from), ["ana"]);
+});
+
+test("deuda por gasto: pagos generales anteriores cubren primero los gastos más antiguos", () => {
+  // Beto debe 10.000 (cena, más antigua) + 15.000 (bencina) = 25.000; ya abonó 12.000 sin "Saldar".
+  const cena = expenseDebts([{ memberId: "ana", amount: 20_000 }], splitEqually(20_000, ["ana", "beto"]));
+  const bencina = expenseDebts([{ memberId: "ana", amount: 30_000 }], splitEqually(30_000, ["ana", "beto"]));
+  applyGeneralPayments([cena, bencina], (h) => (h === "beto" ? 13_000 : 0));
+  assert.deepEqual([cena[0].remaining, cena[0].covered], [0, 10_000]);
+  assert.deepEqual([bencina[0].remaining, bencina[0].covered], [13_000, 2_000]);
+  // Lo pendiente por gasto suma la deuda total.
+  assert.equal(cena[0].remaining + bencina[0].remaining, 13_000);
 });
