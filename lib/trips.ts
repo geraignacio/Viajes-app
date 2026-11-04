@@ -3,7 +3,10 @@ import { prisma } from "@/lib/db";
 import { getTripBalances, type MemberBalance } from "@/lib/finance/balances";
 import { minimizeTransfers, type Settlement } from "@/lib/finance/settlement";
 import { familyBalances, familyHeads } from "@/lib/finance/families";
-import { applyGeneralPayments, expenseDebts, type ExpenseDebt } from "@/lib/finance/expense-debts";
+import { expenseDebts, type ExpenseDebt } from "@/lib/finance/expense-debts";
+
+/** Desde cuándo los gastos muestran su deuda propia y el botón Saldar (pedido de Gerald). */
+const EXPENSE_DEBTS_SINCE = new Date("2026-11-04T02:20:00Z");
 
 export type TripStatus = "active" | "past";
 
@@ -76,18 +79,15 @@ export async function getTripDashboard(tripId: string) {
   // Solo cabezas de familia; para quien no tiene hijos es igual a su saldo propio.
   const familyBalanceById = new Map<string, MemberBalance>(families.map((b) => [b.memberId, b]));
 
-  // Deuda de cada gasto (quién le debe a quién solo por ese registro).
+  // Deuda de cada gasto (quién le debe a quién solo por ese registro). Solo
+  // para gastos registrados desde EXPENSE_DEBTS_SINCE: en los anteriores los
+  // pagos se hicieron sin ligarlos a un gasto y el desglose no cuadraba.
   const linked = new Map<string, typeof transfers>();
   for (const t of transfers) if (t.expenseId) linked.set(t.expenseId, [...(linked.get(t.expenseId) ?? []), t]);
   const debtsByExpense = new Map<string, ExpenseDebt[]>(
-    expenses.map((e) => [e.id, expenseDebts(e.payers, e.splits, linked.get(e.id) ?? [], headOf)]),
-  );
-  // Pagos generales (sin "Saldar") cubren los gastos más antiguos primero, para
-  // que lo pendiente por gasto cuadre con la deuda total. `expenses` viene del más nuevo al más antiguo.
-  applyGeneralPayments(
-    [...expenses].reverse().map((e) => debtsByExpense.get(e.id)!),
-    (h) => familyBalanceById.get(h)?.remaining ?? 0,
-    headOf,
+    expenses
+      .filter((e) => e.createdAt >= EXPENSE_DEBTS_SINCE)
+      .map((e) => [e.id, expenseDebts(e.payers, e.splits, linked.get(e.id) ?? [], headOf)]),
   );
 
   return {
