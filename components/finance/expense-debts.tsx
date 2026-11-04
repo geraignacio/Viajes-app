@@ -24,6 +24,7 @@ export type ExpenseDebtRow = {
   toName: string;
   amount: number;
   paid: number;
+  covered: number;
   remaining: number;
   /** Si quien mira puede registrar este pago (es quien debe, a quien le deben, o lo representa). */
   canSettle: boolean;
@@ -70,14 +71,17 @@ export function ExpenseDebts({
               )}
             </span>
             {done ? (
-              <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
+              <span
+                className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
+                title={d.covered > 0 ? "Cubierto con pagos anteriores o con lo que le deben en otros gastos" : undefined}
+              >
                 <CheckCircle2 className="size-3.5" />
-                <span className="tabular-nums">{fmt(d.amount)}</span> Saldado
+                <span className="tabular-nums">{fmt(d.amount)}</span> {d.covered > 0 ? "Pagado" : "Saldado"}
               </span>
             ) : (
               <span className="font-semibold tabular-nums">
                 {fmt(d.remaining)}
-                {d.paid > 0 && <span className="text-muted-foreground font-normal"> de {fmt(d.amount)}</span>}
+                {d.paid + d.covered > 0 && <span className="text-muted-foreground font-normal"> de {fmt(d.amount)}</span>}
               </span>
             )}
             {canEdit && !done && <SettleButton expenseId={expenseId} title={title} debt={d} fmt={fmt} />}
