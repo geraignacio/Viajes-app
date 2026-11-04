@@ -117,6 +117,55 @@ export async function settleExpenseDebt(raw: unknown): Promise<ActionResult<{ id
   }
 }
 
+/** Deshacer "Saldar": borra los pagos ligados a ese gasto entre esas dos personas. */
+export async function unsettleExpenseDebt(raw: unknown): Promise<ActionResult<{ ids: string[] }>> {
+  const parsed = settleExpenseSchema.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  const input = parsed.data;
+  try {
+    const expense = await prisma.expense.findUnique({ where: { id: input.expenseId }, select: { tripId: true } });
+    if (!expense) throw new ActionError("El gasto no existe");
+    const { member: me, trip } = await requireMember(expense.tripId);
+    if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
+    const from = await prisma.tripMember.findFirst({
+      where: { id: input.fromMemberId, tripId: trip.id },
+      select: { id: true, userId: true, parentMemberId: true },
+    });
+    if (!from) throw new ActionError("Integrante inválido");
+    const linked = await prisma.transfer.findMany({
+      where: {
+        expenseId: input.expenseId,
+        fromMemberId: input.fromMemberId,
+        toMemberId: input.toMemberId,
+        deletedAt: null,
+      },
+      select: { id: true, createdById: true },
+    });
+    if (linked.length === 0) throw new ActionError("No hay pagos para deshacer");
+    const allowed =
+      me.role !== "MEMBER" ||
+      canActFor(me, from) ||
+      input.toMemberId === me.id ||
+      linked.every((t) => t.createdById === me.id);
+    if (!allowed) throw new ActionError("No puedes deshacer este pago");
+    const ids = linked.map((t) => t.id);
+    await prisma.transfer.updateMany({ where: { id: { in: ids } }, data: { deletedAt: new Date() } });
+    revalidatePath(`/trips/${trip.id}`);
+    return ok({ ids });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Rehacer lo que deshizo unsettleExpenseDebt (botón del aviso). */
+export async function restoreTransfers(ids: string[]): Promise<ActionResult<undefined>> {
+  for (const id of ids.slice(0, 50)) {
+    const res = await restoreTransfer({ id });
+    if (!res.ok) return res;
+  }
+  return ok(undefined);
+}
+
 export async function deleteTransfer(raw: unknown): Promise<ActionResult<undefined>> {
   const parsed = deleteByIdSchema.safeParse(raw);
   if (!parsed.success) return invalid(parsed.error);

@@ -23,7 +23,7 @@ export function ActivityList({
   meId: string;
   canModerate: boolean;
 }) {
-  const { trip, expenses, transfers, debtsByExpense, headOf, familyBalanceById } = data;
+  const { trip, expenses, transfers, debtsByExpense } = data;
   const me = trip.members.find((m) => m.id === meId)!;
   const memberById = new Map(trip.members.map((m) => [m.id, m]));
   const name = new Map(trip.members.map((m) => [m.id, m.id === meId ? "Tú" : m.displayName]));
@@ -60,12 +60,10 @@ export function ActivityList({
                     ...d,
                     fromName: name.get(d.from) ?? "?",
                     toName: name.get(d.to) ?? "?",
-                    coveredByGeneral:
-                      (familyBalanceById.get(headOf.get(d.from) ?? d.from)?.remaining ?? 0) === 0,
                     canSettle: d.to === meId || (!!fromMember && canActFor(me, fromMember)),
                   };
                 });
-                const pending = debts.filter((d) => !d.coveredByGeneral).reduce((a, d) => a + d.remaining, 0);
+                const pending = debts.reduce((a, d) => a + d.remaining, 0);
                 return {
                   key: e.id,
                   text: [e.title, e.notes, e.receiptNote, CATEGORY_LABEL[e.category], ...e.items.map((i) => i.name), ...involved.map((id) => name.get(id))].join(" "),
