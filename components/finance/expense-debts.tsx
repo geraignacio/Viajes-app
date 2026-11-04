@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { CheckCircle2, HandCoins } from "lucide-react";
+import { CheckCircle2, HandCoins, Undo2 } from "lucide-react";
 import { toast } from "sonner";
-import { settleExpenseDebt } from "@/server-actions/transfers";
+import { restoreTransfers, settleExpenseDebt, unsettleExpenseDebt } from "@/server-actions/transfers";
 import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,8 +25,6 @@ export type ExpenseDebtRow = {
   amount: number;
   paid: number;
   remaining: number;
-  /** Quien debe ya no tiene deuda en el viaje (pagó con abonos generales). */
-  coveredByGeneral: boolean;
   /** Si quien mira puede registrar este pago (es quien debe, a quien le deben, o lo representa). */
   canSettle: boolean;
 };
@@ -49,34 +47,41 @@ export function ExpenseDebts({
   return (
     <ul className="mt-2 space-y-1.5">
       {debts.map((d) => {
-        const done = d.remaining === 0 || d.coveredByGeneral;
+        const done = d.remaining === 0;
+        const canEdit = !readOnly && d.canSettle;
         return (
           <li
             key={`${d.from}-${d.to}`}
             className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2 py-1.5 text-xs ${done ? "bg-muted/40" : "border-amber-500/40 bg-amber-500/5"}`}
           >
-            <span className="min-w-0 flex-1">
-              <b className="font-medium">{d.fromName}</b> {d.fromName === "Tú" ? "le debes" : "le debe"} a{" "}
-              <b className="font-medium">{d.toName === "Tú" ? "ti" : d.toName}</b>
+            <span className="min-w-0 flex-1 basis-40">
+              {d.fromName === "Tú" ? (
+                <>
+                  Le debes a <b className="font-medium">{d.toName}</b>
+                </>
+              ) : d.toName === "Tú" ? (
+                <>
+                  <b className="font-medium">{d.fromName}</b> te debe
+                </>
+              ) : (
+                <>
+                  <b className="font-medium">{d.fromName}</b> le debe a <b className="font-medium">{d.toName}</b>
+                </>
+              )}
             </span>
             {done ? (
-              <span
-                className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
-                title={d.remaining === 0 ? undefined : "Ya no debe nada en el viaje: se compensó con otros gastos o pagos"}
-              >
+              <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="size-3.5" />
-                <span className="tabular-nums line-through opacity-70">{fmt(d.amount)}</span>
-                {d.remaining === 0 ? "Saldado" : "Compensado"}
+                <span className="tabular-nums">{fmt(d.amount)}</span> Saldado
               </span>
             ) : (
-              <>
-                <span className="font-semibold tabular-nums">
-                  {fmt(d.remaining)}
-                  {d.paid > 0 && <span className="text-muted-foreground font-normal"> de {fmt(d.amount)}</span>}
-                </span>
-                {!readOnly && d.canSettle && <SettleButton expenseId={expenseId} title={title} debt={d} fmt={fmt} />}
-              </>
+              <span className="font-semibold tabular-nums">
+                {fmt(d.remaining)}
+                {d.paid > 0 && <span className="text-muted-foreground font-normal"> de {fmt(d.amount)}</span>}
+              </span>
             )}
+            {canEdit && !done && <SettleButton expenseId={expenseId} title={title} debt={d} fmt={fmt} />}
+            {canEdit && d.paid > 0 && <UndoButton expenseId={expenseId} debt={d} />}
           </li>
         );
       })}
@@ -104,7 +109,10 @@ function SettleButton({
       const res = await settleExpenseDebt({ expenseId, fromMemberId: debt.from, toMemberId: debt.to });
       if (res.ok) {
         setOpen(false);
-        toast.success(`Saldado: ${fmt(res.data.amount)} de ${title}`);
+        toast.success(`Saldado: ${fmt(res.data.amount)} de ${title}`, {
+          duration: 10_000,
+          action: { label: "Deshacer", onClick: () => void undoSettle(expenseId, debt) },
+        });
       } else toast.error(res.error);
     });
 
@@ -121,7 +129,7 @@ function SettleButton({
           <DialogDescription>
             Se registra un pago de <b>{fmt(debt.remaining)}</b> de {debt.fromName === "Tú" ? "ti" : debt.fromName} a {to}{" "}
             por este gasto. Hazlo cuando el dinero ya se haya transferido. Los saldos se recalculan y, si te equivocas,
-            puedes borrar el pago en &quot;Pagos registrados&quot;.
+            puedes tocar &quot;Deshacer&quot;.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -136,5 +144,40 @@ function SettleButton({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Borra el pago hecho con Saldar; el aviso permite rehacerlo. */
+async function undoSettle(expenseId: string, debt: ExpenseDebtRow) {
+  const res = await unsettleExpenseDebt({ expenseId, fromMemberId: debt.from, toMemberId: debt.to });
+  if (!res.ok) {
+    toast.error(res.error);
+    return;
+  }
+  toast.success("Pago deshecho: la deuda vuelve a quedar pendiente", {
+    duration: 10_000,
+    action: {
+      label: "Rehacer",
+      onClick: async () => {
+        const r = await restoreTransfers(res.data.ids);
+        if (r.ok) toast.success("Pago recuperado");
+        else toast.error(r.error);
+      },
+    },
+  });
+}
+
+function UndoButton({ expenseId, debt }: { expenseId: string; debt: ExpenseDebtRow }) {
+  const [pending, startTransition] = useTransition();
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="text-muted-foreground h-7 px-2 text-xs"
+      disabled={pending}
+      onClick={() => startTransition(() => undoSettle(expenseId, debt))}
+    >
+      <Undo2 className="size-3.5" /> {pending ? "Deshaciendo…" : "Deshacer"}
+    </Button>
   );
 }
