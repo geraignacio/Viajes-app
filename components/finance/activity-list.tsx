@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CategoryIcon } from "./category-icon";
 import { DeleteButton } from "./delete-button";
 import { ActivityFilters, type ActivityEntry } from "./activity-filters";
+import { ExpenseDebts, type ExpenseDebtRow } from "./expense-debts";
+import { canActFor } from "@/lib/permissions";
 
 type Item =
   | { kind: "expense"; date: Date; createdAt: Date; e: TripDashboard["expenses"][number] }
@@ -21,7 +23,9 @@ export function ActivityList({
   meId: string;
   canModerate: boolean;
 }) {
-  const { trip, expenses, transfers } = data;
+  const { trip, expenses, transfers, debtsByExpense, headOf, familyBalanceById } = data;
+  const me = trip.members.find((m) => m.id === meId)!;
+  const memberById = new Map(trip.members.map((m) => [m.id, m]));
   const name = new Map(trip.members.map((m) => [m.id, m.id === meId ? "Tú" : m.displayName]));
   const fmt = (n: number) => formatMoney(n, trip.currency);
   const readOnly = !!trip.archivedAt;
@@ -50,6 +54,18 @@ export function ActivityList({
                 const payers = e.payers.map((p) => name.get(p.memberId)).join(", ");
                 const canDelete = !readOnly && (canModerate || e.createdById === meId);
                 const involved = [...new Set([...e.payers, ...e.splits].map((x) => x.memberId))];
+                const debts: ExpenseDebtRow[] = (debtsByExpense.get(e.id) ?? []).map((d) => {
+                  const fromMember = memberById.get(d.from);
+                  return {
+                    ...d,
+                    fromName: name.get(d.from) ?? "?",
+                    toName: name.get(d.to) ?? "?",
+                    coveredByGeneral:
+                      (familyBalanceById.get(headOf.get(d.from) ?? d.from)?.remaining ?? 0) === 0,
+                    canSettle: d.to === meId || (!!fromMember && canActFor(me, fromMember)),
+                  };
+                });
+                const pending = debts.filter((d) => !d.coveredByGeneral).reduce((a, d) => a + d.remaining, 0);
                 return {
                   key: e.id,
                   text: [e.title, e.notes, e.receiptNote, CATEGORY_LABEL[e.category], ...e.items.map((i) => i.name), ...involved.map((id) => name.get(id))].join(" "),
@@ -57,7 +73,7 @@ export function ActivityList({
                   memberIds: involved,
                   amount: e.amount,
                   node: (
-                    <li key={e.id} className="flex items-start gap-3 py-3">
+                    <li key={e.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 py-3">
                       <span className="bg-muted mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg">
                         <CategoryIcon category={e.category} className="size-4" />
                       </span>
@@ -103,6 +119,14 @@ export function ActivityList({
                         <p className="text-muted-foreground text-xs tabular-nums">tu parte {fmt(myShare)}</p>
                       </div>
                       {canDelete && <DeleteButton kind="expense" id={e.id} label={e.title} details={`${e.title}: ${fmt(e.amount)} (${formatDate(e.date)})`} />}
+                      {debts.length > 0 && (
+                        <details className="basis-full pl-12 text-xs" open={pending > 0 && debts.some((d) => d.from === meId || d.to === meId) ? true : undefined}>
+                          <summary className="text-primary cursor-pointer">
+                            {pending > 0 ? `Deuda de este gasto: ${fmt(pending)} pendiente` : "Deuda de este gasto: saldada"}
+                          </summary>
+                          <ExpenseDebts expenseId={e.id} title={e.title} currency={trip.currency} debts={debts} readOnly={readOnly} />
+                        </details>
+                      )}
                     </li>
                   ),
                 };

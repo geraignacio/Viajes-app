@@ -236,6 +236,7 @@ model Expense {
   payers    ExpensePayer[] // quién(es) pagaron: sum(amount) == Expense.amount
   splits    ExpenseSplit[] // a quién le corresponde: sum(amount) == Expense.amount
   items     ExpenseItem[] // solo en división por ítem; los splits ya vienen calculados
+  transfers Transfer[] // pagos hechos para saldar la deuda de este gasto
 
   // Listado del viaje ordenado por fecha, excluyendo borrados.
   @@index([tripId, deletedAt, date(sort: Desc)])
@@ -296,12 +297,16 @@ model Transfer {
   amount       Int // > 0
   date         DateTime  @default(now()) @db.Date
   note         String?   @db.VarChar(500)
+  // Pago hecho desde "Saldar" en un gasto: queda ligado a ese gasto para
+  // mostrar su deuda como pagada. Para los saldos es un abono como cualquier otro.
+  expenseId    String?
   createdById  String
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
   trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  expense   Expense?   @relation(fields: [expenseId], references: [id], onDelete: SetNull)
   from      TripMember @relation("TransferFrom", fields: [fromMemberId], references: [id], onDelete: Restrict)
   to        TripMember @relation("TransferTo", fields: [toMemberId], references: [id], onDelete: Restrict)
   createdBy TripMember @relation("TransferCreatedBy", fields: [createdById], references: [id])
@@ -309,6 +314,7 @@ model Transfer {
   @@index([tripId, deletedAt, date(sort: Desc)])
   @@index([fromMemberId])
   @@index([toMemberId])
+  @@index([expenseId])
 }
 
 // Plan "pago mi deuda en N cuotas" de un integrante. Guarda la deuda y lo

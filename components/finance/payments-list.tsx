@@ -25,6 +25,7 @@ export function PaymentsList({
   const fmt = (n: number) => formatMoney(n, trip.currency);
   const readOnly = !!trip.archivedAt;
   const total = transfers.reduce((a, t) => a + t.amount, 0);
+  const expenseTitle = new Map(data.expenses.map((e) => [e.id, e.title]));
 
   const row = (t: TripDashboard["transfers"][number]) => {
     const from = name.get(t.fromMemberId) ?? "?";
@@ -42,6 +43,7 @@ export function PaymentsList({
           <p className="text-muted-foreground text-xs">
             {formatDate(t.date)}
             {t.note && ` · ${t.note}`}
+            {t.expenseId && !t.note && expenseTitle.get(t.expenseId) && ` · por ${expenseTitle.get(t.expenseId)}`}
             {recordedBy && ` · anotado por ${recordedBy}`}
           </p>
         </div>

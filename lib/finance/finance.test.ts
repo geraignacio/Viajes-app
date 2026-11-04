@@ -4,6 +4,7 @@ import { computeSplits, splitByItems, splitEqually } from "./split.ts";
 import { buildBalances } from "./balances.ts";
 import { minimizeTransfers } from "./settlement.ts";
 import { allocateProportional, convertMinor } from "./fx.ts";
+import { expenseDebts } from "./expense-debts.ts";
 
 test("partes iguales: reparte el resto de forma exacta y determinista", () => {
   const r = splitEqually(10_000, ["c", "a", "b"]);
@@ -184,4 +185,40 @@ test("por ítem: cada uno paga lo suyo y la propina en proporción", () => {
     138_600,
   );
   assert.throws(() => splitByItems(100, [{ amount: 150, memberIds: [] }]));
+});
+
+test("deuda por gasto: Ana paga 30.000 entre 3 → Beto y Carla le deben 10.000 c/u", () => {
+  const d = expenseDebts(
+    [{ memberId: "ana", amount: 30_000 }],
+    splitEqually(30_000, ["ana", "beto", "carla"]),
+    [{ fromMemberId: "beto", toMemberId: "ana", amount: 10_000 }],
+  );
+  assert.deepEqual(d, [
+    { from: "beto", to: "ana", amount: 10_000, paid: 10_000, remaining: 0 },
+    { from: "carla", to: "ana", amount: 10_000, paid: 0, remaining: 10_000 },
+  ]);
+});
+
+test("deuda por gasto: varios pagadores, se reparte en proporción y cuadra exacto", () => {
+  const payers = [{ memberId: "ana", amount: 60_001 }, { memberId: "beto", amount: 40_000 }];
+  const splits = splitEqually(100_001, ["ana", "beto", "carla", "diego"]);
+  const d = expenseDebts(payers, splits);
+  const net = new Map<string, number>();
+  for (const p of payers) net.set(p.memberId, (net.get(p.memberId) ?? 0) + p.amount);
+  for (const s of splits) net.set(s.memberId, (net.get(s.memberId) ?? 0) - s.amount);
+  for (const x of d) {
+    net.set(x.from, net.get(x.from)! + x.amount);
+    net.set(x.to, net.get(x.to)! - x.amount);
+  }
+  assert.ok([...net.values()].every((v) => v === 0));
+});
+
+test("deuda por gasto: no muestra deudas dentro de la familia", () => {
+  const d = expenseDebts(
+    [{ memberId: "papa", amount: 30_000 }],
+    splitEqually(30_000, ["papa", "hijo", "ana"]),
+    [],
+    new Map([["hijo", "papa"]]),
+  );
+  assert.deepEqual(d.map((x) => x.from), ["ana"]);
 });
