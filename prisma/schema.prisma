@@ -71,12 +71,13 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts     Account[]
-  sessions     Session[]
-  memberships  TripMember[]
-  tripsCreated Trip[]       @relation("TripCreatedBy")
-  paymentInfo  PaymentInfo?
-  driveTrips   Trip[]       @relation("TripDriveOwner")
+  accounts          Account[]
+  sessions          Session[]
+  memberships       TripMember[]
+  tripsCreated      Trip[]             @relation("TripCreatedBy")
+  paymentInfo       PaymentInfo?
+  driveTrips        Trip[]             @relation("TripDriveOwner")
+  pushSubscriptions PushSubscription[]
 }
 
 // Datos para RECIBIR transferencias (nunca claves ni tarjetas). Solo los ven
@@ -359,4 +360,19 @@ model KeepAlive {
   id       Int      @id
   pingedAt DateTime
   count    Int      @default(0)
+}
+
+// Notificaciones push (Web Push): una fila por navegador/celular donde la
+// persona activó los avisos. Se borra sola si el navegador la da de baja.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique @db.VarChar(2048)
+  p256dh    String   @db.VarChar(255)
+  auth      String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

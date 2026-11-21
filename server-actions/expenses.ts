@@ -1,12 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
 import { convertAmount, toMinor } from "@/lib/money";
 import { allocateProportional } from "@/lib/finance/fx";
 import { computeSplits, type SplitInput } from "@/lib/finance/split";
 import { canActFor } from "@/lib/permissions";
+import { notifyExpenseCreated } from "@/lib/notifications/push";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { deleteByIdSchema, expenseInputSchema } from "@/lib/validation/expense";
 
@@ -16,7 +18,7 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
   const input = parsed.data;
 
   try {
-    const { member: me, trip } = await requireMember(input.tripId);
+    const { member: me, trip, user } = await requireMember(input.tripId);
     if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
     // Los montos llegan en `currency` (la del viaje u otra); se validan ahí y
     // después se convierten a la moneda del viaje, que es la de los saldos.
@@ -160,6 +162,8 @@ export async function createExpense(raw: unknown): Promise<ActionResult<{ id: st
     });
 
     revalidatePath(`/trips/${trip.id}`);
+    // Aviso a los demás involucrados, después de responder (no demora el guardado).
+    after(() => notifyExpenseCreated(expense.id, user.id).catch((e) => console.error(e)));
     return ok(expense);
   } catch (e) {
     return fail(e);

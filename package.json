@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --no-warnings --test lib/finance/finance.test.ts",
+    "test": "node --experimental-strip-types --no-warnings --test lib/finance/finance.test.ts lib/notifications/messages.test.ts",
     "postinstall": "prisma generate",
     "vercel-build": "prisma migrate deploy && next build",
     "db:migrate": "prisma migrate dev",
@@ -33,6 +33,7 @@
     "server-only": "^0.0.1",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.3.0",
+    "web-push": "^3.6.7",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -40,6 +41,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
     "prisma": "6.19.3",
     "tailwindcss": "^4.3.3",
     "tw-animate-css": "^1.3.0",
