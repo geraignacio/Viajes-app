@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireMember } from "@/lib/access";
 import { toMinor } from "@/lib/money";
 import { canActFor } from "@/lib/permissions";
+import { notifyTransferCreated } from "@/lib/notifications/push";
 import { ActionError, fail, invalid, ok, type ActionResult } from "@/lib/action-result";
 import { deleteByIdSchema } from "@/lib/validation/expense";
 import { settleExpenseSchema, transferInputSchema } from "@/lib/validation/transfer";
@@ -17,7 +19,7 @@ export async function createTransfer(raw: unknown): Promise<ActionResult<{ id: s
   const input = parsed.data;
 
   try {
-    const { member: me, trip } = await requireMember(input.tripId);
+    const { member: me, trip, user } = await requireMember(input.tripId);
     if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
 
     const both = await prisma.tripMember.findMany({
@@ -46,6 +48,7 @@ export async function createTransfer(raw: unknown): Promise<ActionResult<{ id: s
       select: { id: true },
     });
     revalidatePath(`/trips/${trip.id}`);
+    after(() => notifyTransferCreated(transfer.id, user.id).catch((e) => console.error(e)));
     return ok(transfer);
   } catch (e) {
     return fail(e);
@@ -67,7 +70,7 @@ export async function settleExpenseDebt(raw: unknown): Promise<ActionResult<{ id
       select: { tripId: true, title: true, deletedAt: true },
     });
     if (!expense || expense.deletedAt) throw new ActionError("El gasto no existe");
-    const { member: me, trip } = await requireMember(expense.tripId);
+    const { member: me, trip, user } = await requireMember(expense.tripId);
     if (trip.archivedAt) throw new ActionError("El viaje está cerrado");
 
     const from = await prisma.tripMember.findFirst({
@@ -101,6 +104,7 @@ export async function settleExpenseDebt(raw: unknown): Promise<ActionResult<{ id
       select: { id: true, amount: true },
     });
     revalidatePath(`/trips/${trip.id}`);
+    after(() => notifyTransferCreated(transfer.id, user.id).catch((e) => console.error(e)));
     return ok(transfer);
   } catch (e) {
     return fail(e);

@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/access";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationsToggle } from "@/components/notifications-toggle";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
@@ -16,6 +17,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <Plane className="text-primary size-5" /> Viajes
           </Link>
           <div className="ml-auto flex items-center gap-1">
+            <NotificationsToggle />
             <ThemeToggle />
             <Link href="/profile" aria-label="Mi perfil y datos de transferencia" className="mx-1 rounded-full">
               <Avatar name={user.name ?? user.email ?? "?"} image={user.image} />
